@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title></title>
+    <meta charset="utf-8" />
+</head>
+<body>
+
+    <!--
+    <div id="app"></div>
+    @vite('resources/js/app.js')
+    -->
+
+
+
+</body>
+
+</html>
