@@ -1,4 +1,4 @@
-// === Canvas ===
+// === CANVAS ===
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 
@@ -10,10 +10,7 @@ const maxZoom = 6;          //максимальный
 let baseTileSize = 32;
 let tileSize = baseTileSize * zoom;
 
-let visibleTilesX = 20;
-let visibleTilesY = 12;
-
-// Камера
+// === CAMERA (левый верхний угол мира) ===
 const camera = {
     x: 0,
     y: 0,
@@ -21,20 +18,19 @@ const camera = {
     screenCenterY: 0
 };
 
-// === Мир ===
-const WORLD_WIDTH = 16 * 16;     // 16 чанков
-const WORLD_HEIGHT = 16 * 16;
+// === WORLD CONFIG ===
+const WORLD_WIDTH = 16 * 16;   // тайлов
+const WORLD_HEIGHT = 16 * 16;  // тайлов
 
+// === WORLD GENERATION ===
 const world = [];
 for (let y = 0; y < WORLD_HEIGHT; y++) {
     const row = [];
-    for (let x = 0; x < WORLD_WIDTH; x++) {
-        row.push(1);
-    }
+    for (let x = 0; x < WORLD_WIDTH; x++) row.push(1);
     world.push(row);
 }
 
-// === Resize ===
+// === RESIZE ===
 function onResize() {
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
@@ -42,153 +38,179 @@ function onResize() {
     camera.screenCenterX = canvas.width / 2;
     camera.screenCenterY = canvas.height / 2;
 
-    visibleTilesX = Math.ceil(canvas.width / tileSize);
-    visibleTilesY = Math.ceil(canvas.height / tileSize);
+    visibleTilesX = Math.ceil(canvas.width / tileSize) + 2;
+    visibleTilesY = Math.ceil(canvas.height / tileSize) + 2;
 }
 window.addEventListener("resize", onResize);
 
+// === CAMERA LIMITS ===
+function clampCamera() {
+    const maxX = WORLD_WIDTH * tileSize - canvas.width;
+    const maxY = WORLD_HEIGHT * tileSize - canvas.height;
 
-// === Установка зума ===
-function setZoom(newZoom, centerX, centerY) {
+    camera.x = Math.max(0, Math.min(camera.x, maxX));
+    camera.y = Math.max(0, Math.min(camera.y, maxY));
+}
+
+// === ZOOM ===
+function setZoom(newZoom, centerX = camera.screenCenterX, centerY = camera.screenCenterY) {
     const oldZoom = zoom;
     zoom = Math.min(maxZoom, Math.max(minZoom, newZoom));
 
-    // Место курсора → точка мира
-    const worldX = (centerX - camera.screenCenterX + camera.x) / (baseTileSize * oldZoom);
-    const worldY = (centerY - camera.screenCenterY + camera.y) / (baseTileSize * oldZoom);
+    if (zoom === oldZoom) return;
 
-    // Обновляем tileSize
+    // координата мира под курсором до зума
+    const worldX = (camera.x + centerX) / (baseTileSize * oldZoom);
+    const worldY = (camera.y + centerY) / (baseTileSize * oldZoom);
+
     tileSize = baseTileSize * zoom;
 
-    // Пересчёт камеры так, чтобы точка под курсором оставалась в том же месте
-    camera.x = worldX * tileSize;
-    camera.y = worldY * tileSize;
+    // новая позиция камеры — держим точку под курсором
+    camera.x = worldX * tileSize - centerX;
+    camera.y = worldY * tileSize - centerY;
 
-    visibleTilesX = Math.ceil(canvas.width / tileSize);
-    visibleTilesY = Math.ceil(canvas.height / tileSize);
+    clampCamera();
+
+    visibleTilesX = Math.ceil(canvas.width / tileSize) + 2;
+    visibleTilesY = Math.ceil(canvas.height / tileSize) + 2;
 }
 
-
-// === Zoom колесом мыши ===
+// === WHEEL ZOOM (ПК) ===
 canvas.addEventListener("wheel", (e) => {
     e.preventDefault();
-
-    const delta = -e.deltaY * 0.001; // чувствительность
-    const mouseX = e.clientX;
-    const mouseY = e.clientY;
-
-    setZoom(zoom + delta, mouseX, mouseY);
+    const delta = -e.deltaY * 0.001;
+    setZoom(zoom + delta, e.clientX, e.clientY);
 }, { passive: false });
 
+// === DRAG (как Google Maps) ===
+let isDragging = false;
+let dragStartX = 0;
+let dragStartY = 0;
+let cameraStartX = 0;
+let cameraStartY = 0;
 
-// === Pinch zoom (телефон) ===
+canvas.addEventListener("mousedown", (e) => {
+    if (e.button !== 0) return;
+    isDragging = true;
+
+    dragStartX = e.clientX;
+    dragStartY = e.clientY;
+
+    cameraStartX = camera.x;
+    cameraStartY = camera.y;
+});
+
+window.addEventListener("mouseup", () => {
+    isDragging = false;
+});
+
+window.addEventListener("mousemove", (e) => {
+    if (!isDragging) return;
+
+    const dx = e.clientX - dragStartX;
+    const dy = e.clientY - dragStartY;
+
+    camera.x = cameraStartX - dx;
+    camera.y = cameraStartY - dy;
+
+    clampCamera();
+});
+
+// === TOUCH: PINCH-ZOOM + PAN ===
 let lastPinchDist = null;
 let pinchCenterX = 0;
 let pinchCenterY = 0;
 
 canvas.addEventListener("touchstart", (e) => {
     if (e.touches.length === 2) {
-        const t1 = e.touches[0];
-        const t2 = e.touches[1];
+        const t1 = e.touches[0], t2 = e.touches[1];
 
-        // начальная дистанция между пальцами
         const dx = t1.clientX - t2.clientX;
         const dy = t1.clientY - t2.clientY;
-        lastPinchDist = Math.sqrt(dx*dx + dy*dy);
+        lastPinchDist = Math.sqrt(dx * dy + dy * dy);
 
-        // центр жеста
         pinchCenterX = (t1.clientX + t2.clientX) / 2;
         pinchCenterY = (t1.clientY + t2.clientY) / 2;
     }
 }, { passive: false });
 
-
-
 canvas.addEventListener("touchmove", (e) => {
     if (e.touches.length === 2) {
-        e.preventDefault(); // запрет скролла страницы
+        e.preventDefault();
 
-        const t1 = e.touches[0];
-        const t2 = e.touches[1];
+        const t1 = e.touches[0], t2 = e.touches[1];
 
         const dx = t1.clientX - t2.clientX;
         const dy = t1.clientY - t2.clientY;
-        const dist = Math.sqrt(dx*dx + dy*dy);
+        const dist = Math.sqrt(dx * dx + dy * dy);
 
-        if (lastPinchDist !== null) {
-            const delta = (dist - lastPinchDist) * 0.004; // скорость зума
+        const delta = (dist - lastPinchDist) * 0.004;
 
-            // центр жеста обновляется
-            pinchCenterX = (t1.clientX + t2.clientX) / 2;
-            pinchCenterY = (t1.clientY + t2.clientY) / 2;
+        pinchCenterX = (t1.clientX + t2.clientX) / 2;
+        pinchCenterY = (t1.clientY + t2.clientY) / 2;
 
-            // зумируем
-            setZoom(zoom + delta, pinchCenterX, pinchCenterY);
-        }
+        setZoom(zoom + delta, pinchCenterX, pinchCenterY);
 
         lastPinchDist = dist;
+        return;
+    }
+
+    if (e.touches.length === 1) {
+        const t = e.touches[0];
+
+        if (!isDragging) {
+            isDragging = true;
+            dragStartX = t.clientX;
+            dragStartY = t.clientY;
+            cameraStartX = camera.x;
+            cameraStartY = camera.y;
+        }
+
+        const dx = t.clientX - dragStartX;
+        const dy = t.clientY - dragStartY;
+
+        camera.x = cameraStartX - dx;
+        camera.y = cameraStartY - dy;
+
+        clampCamera();
     }
 }, { passive: false });
 
+canvas.addEventListener("touchend", () => {
+    isDragging = false;
+    lastPinchDist = null;
+});
 
-canvas.addEventListener("touchend", (e) => {
-    // Если стало меньше двух пальцев — сброс pinch
-    if (e.touches.length < 2) {
-        lastPinchDist = null;
-    }
-}, { passive: false });
+// === DRAW TILE ===
+function drawTile(x, y) {
+    const screenX = x * tileSize - camera.x;
+    const screenY = y * tileSize - camera.y;
 
-
-
-// === Рендер тайла ===
-function drawTile(x, y, type) {
-    const screenX = x * tileSize - camera.x + camera.screenCenterX;
-    const screenY = y * tileSize - camera.y + camera.screenCenterY;
-
-    ctx.fillStyle = "#2ecc71"; // зелёный
+    ctx.fillStyle = "#2ecc71";
     ctx.fillRect(screenX, screenY, tileSize - 1, tileSize - 1);
 }
 
-
-// === Рендер мира ===
+// === RENDER WORLD ===
 function renderWorld() {
-    const startX = Math.floor((camera.x - camera.screenCenterX) / tileSize);
-    const startY = Math.floor((camera.y - camera.screenCenterY) / tileSize);
+    const startX = Math.floor(camera.x / tileSize);
+    const startY = Math.floor(camera.y / tileSize);
 
-    const endX = startX + visibleTilesX + 2;
-    const endY = startY + visibleTilesY + 2;
+    const endX = startX + visibleTilesX;
+    const endY = startY + visibleTilesY;
 
     for (let y = startY; y < endY; y++) {
         for (let x = startX; x < endX; x++) {
             if (world[y] && world[y][x] !== undefined) {
-                drawTile(x, y, world[y][x]);
+                drawTile(x, y);
             }
         }
     }
 }
 
-
-// === Игрок ===
-const player = {
-    x: WORLD_WIDTH / 2,
-    y: WORLD_HEIGHT / 2
-};
-
-
-// === Обновление камеры ===
-function updateCamera() {
-    camera.x = player.x * tileSize;
-    camera.y = player.y * tileSize;
-}
-
-
-// === Game Loop ===
+// === MAIN LOOP ===
 function loop() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    updateCamera();
     renderWorld();
-
     requestAnimationFrame(loop);
 }
 
