@@ -82,11 +82,31 @@ canvas.addEventListener("wheel", (e) => {
 
 
 // === Pinch zoom (телефон) ===
-let lastPinchDist = 0;
+let lastPinchDist = null;
+let pinchCenterX = 0;
+let pinchCenterY = 0;
+
+canvas.addEventListener("touchstart", (e) => {
+    if (e.touches.length === 2) {
+        const t1 = e.touches[0];
+        const t2 = e.touches[1];
+
+        // начальная дистанция между пальцами
+        const dx = t1.clientX - t2.clientX;
+        const dy = t1.clientY - t2.clientY;
+        lastPinchDist = Math.sqrt(dx*dx + dy*dy);
+
+        // центр жеста
+        pinchCenterX = (t1.clientX + t2.clientX) / 2;
+        pinchCenterY = (t1.clientY + t2.clientY) / 2;
+    }
+}, { passive: false });
+
+
 
 canvas.addEventListener("touchmove", (e) => {
     if (e.touches.length === 2) {
-        e.preventDefault();
+        e.preventDefault(); // запрет скролла страницы
 
         const t1 = e.touches[0];
         const t2 = e.touches[1];
@@ -95,21 +115,29 @@ canvas.addEventListener("touchmove", (e) => {
         const dy = t1.clientY - t2.clientY;
         const dist = Math.sqrt(dx*dx + dy*dy);
 
-        if (lastPinchDist !== 0) {
-            const delta = (dist - lastPinchDist) * 0.002;
+        if (lastPinchDist !== null) {
+            const delta = (dist - lastPinchDist) * 0.004; // скорость зума
 
-            const centerX = (t1.clientX + t2.clientX) / 2;
-            const centerY = (t1.clientY + t2.clientY) / 2;
+            // центр жеста обновляется
+            pinchCenterX = (t1.clientX + t2.clientX) / 2;
+            pinchCenterY = (t1.clientY + t2.clientY) / 2;
 
-            setZoom(zoom + delta, centerX, centerY);
+            // зумируем
+            setZoom(zoom + delta, pinchCenterX, pinchCenterY);
         }
+
         lastPinchDist = dist;
     }
 }, { passive: false });
 
-canvas.addEventListener("touchend", () => {
-    lastPinchDist = 0;
-});
+
+canvas.addEventListener("touchend", (e) => {
+    // Если стало меньше двух пальцев — сброс pinch
+    if (e.touches.length < 2) {
+        lastPinchDist = null;
+    }
+}, { passive: false });
+
 
 
 // === Рендер тайла ===
