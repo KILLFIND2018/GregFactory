@@ -116,69 +116,99 @@ window.addEventListener("mousemove", (e) => {
     clampCamera();
 });
 
-// === TOUCH: PINCH-ZOOM + PAN ===
+// === TOUCH CONTROLS ===
+let isTouchDragging = false;
+let touchStartX = 0;
+let touchStartY = 0;
+let touchCameraStartX = 0;
+let touchCameraStartY = 0;
+
+// pinch
 let lastPinchDist = null;
 let pinchCenterX = 0;
 let pinchCenterY = 0;
 
 canvas.addEventListener("touchstart", (e) => {
-    if (e.touches.length === 2) {
+    if (e.touches.length === 1) {
+        // Начинаем обычный свайп (панорама)
+        const t = e.touches[0];
+
+        isTouchDragging = true;
+
+        touchStartX = t.clientX;
+        touchStartY = t.clientY;
+
+        touchCameraStartX = camera.x;
+        touchCameraStartY = camera.y;
+
+        lastPinchDist = null; // сброс pinch
+    }
+
+    else if (e.touches.length === 2) {
+        // Начинается pinch zoom
         const t1 = e.touches[0], t2 = e.touches[1];
 
         const dx = t1.clientX - t2.clientX;
         const dy = t1.clientY - t2.clientY;
-        lastPinchDist = Math.sqrt(dx * dy + dy * dy);
+
+        lastPinchDist = Math.sqrt(dx*dx + dy*dy);
 
         pinchCenterX = (t1.clientX + t2.clientX) / 2;
         pinchCenterY = (t1.clientY + t2.clientY) / 2;
+
+        isTouchDragging = false; // отключаем панорамирование
     }
 }, { passive: false });
 
 canvas.addEventListener("touchmove", (e) => {
-    if (e.touches.length === 2) {
+    if (e.touches.length === 1) {
+        // === PAN / SWIPE ===
+        e.preventDefault();
+
+        // если до этого был pinch, запрещаем дергание
+        if (!isTouchDragging) return;
+
+        const t = e.touches[0];
+        const dx = t.clientX - touchStartX;
+        const dy = t.clientY - touchStartY;
+
+        camera.x = touchCameraStartX - dx;
+        camera.y = touchCameraStartY - dy;
+
+        clampCamera();
+    }
+
+    else if (e.touches.length === 2) {
+        // === PINCH ZOOM ===
         e.preventDefault();
 
         const t1 = e.touches[0], t2 = e.touches[1];
 
         const dx = t1.clientX - t2.clientX;
         const dy = t1.clientY - t2.clientY;
-        const dist = Math.sqrt(dx * dx + dy * dy);
 
-        const delta = (dist - lastPinchDist) * 0.004;
+        const dist = Math.sqrt(dx*dx + dy*dy);
 
-        pinchCenterX = (t1.clientX + t2.clientX) / 2;
-        pinchCenterY = (t1.clientY + t2.clientY) / 2;
+        if (lastPinchDist !== null) {
+            const delta = (dist - lastPinchDist) * 0.004;
 
-        setZoom(zoom + delta, pinchCenterX, pinchCenterY);
+            pinchCenterX = (t1.clientX + t2.clientX) / 2;
+            pinchCenterY = (t1.clientY + t2.clientY) / 2;
 
-        lastPinchDist = dist;
-        return;
-    }
-
-    if (e.touches.length === 1) {
-        const t = e.touches[0];
-
-        if (!isDragging) {
-            isDragging = true;
-            dragStartX = t.clientX;
-            dragStartY = t.clientY;
-            cameraStartX = camera.x;
-            cameraStartY = camera.y;
+            setZoom(zoom + delta, pinchCenterX, pinchCenterY);
         }
 
-        const dx = t.clientX - dragStartX;
-        const dy = t.clientY - dragStartY;
-
-        camera.x = cameraStartX - dx;
-        camera.y = cameraStartY - dy;
-
-        clampCamera();
+        lastPinchDist = dist;
     }
 }, { passive: false });
 
 canvas.addEventListener("touchend", () => {
-    isDragging = false;
-    lastPinchDist = null;
+    if (event.touches.length < 2) {
+        lastPinchDist = null;
+    }
+    if (event.touches.length === 0) {
+        isTouchDragging = false;
+    }
 });
 
 // === DRAW TILE ===
