@@ -10,6 +10,19 @@ const maxZoom = 6;          //максимальный
 let baseTileSize = 32;
 let tileSize = baseTileSize * zoom;
 
+// GLOBAL SPEED VARIABLES
+
+let velocityX = 0;
+let velocityY = 0;
+
+const inertiaDamping = 0.92;   // скорость затухания
+const velocityMax = 50;        // ограничение инерции (px/frame)
+
+let lastDX = 0;
+let lastDY = 0;
+
+
+
 // === CAMERA (левый верхний угол мира) ===
 const camera = {
     x: 0,
@@ -102,6 +115,9 @@ canvas.addEventListener("mousedown", (e) => {
 
 window.addEventListener("mouseup", () => {
     isDragging = false;
+    //Добавляем переменные для пк-drag
+    lastDX = 0;
+    lastDY = 0;
 });
 
 window.addEventListener("mousemove", (e) => {
@@ -112,6 +128,17 @@ window.addEventListener("mousemove", (e) => {
 
     camera.x = cameraStartX - dx;
     camera.y = cameraStartY - dy;
+
+    // скорость — разница между текущим и прошлым кадром
+    velocityX = (dx - lastDX) * 0.5;
+    velocityY = (dy - lastDY) * 0.5;
+
+    // ограничение скорости
+    velocityX = Math.max(-velocityMax, Math.min(velocityX, velocityMax));
+    velocityY = Math.max(-velocityMax, Math.min(velocityY, velocityMax));
+
+    lastDX = dx;
+    lastDY = dy;
 
     clampCamera();
 });
@@ -127,6 +154,10 @@ let touchCameraStartY = 0;
 let lastPinchDist = null;
 let pinchCenterX = 0;
 let pinchCenterY = 0;
+
+let lastTouchDX = 0;
+let lastTouchDY = 0;
+
 
 canvas.addEventListener("touchstart", (e) => {
     if (e.touches.length === 1) {
@@ -175,6 +206,16 @@ canvas.addEventListener("touchmove", (e) => {
         camera.x = touchCameraStartX - dx;
         camera.y = touchCameraStartY - dy;
 
+        // инерционная скорость
+        velocityX = (dx - lastTouchDX) * 0.5;
+        velocityY = (dy - lastTouchDY) * 0.5;
+
+        velocityX = Math.max(-velocityMax, Math.min(velocityX, velocityMax));
+        velocityY = Math.max(-velocityMax, Math.min(velocityY, velocityMax));
+
+        lastTouchDX = dx;
+        lastTouchDY = dy;
+
         clampCamera();
     }
 
@@ -208,6 +249,8 @@ canvas.addEventListener("touchend", () => {
     }
     if (event.touches.length === 0) {
         isTouchDragging = false;
+        lastTouchDX = 0;
+        lastTouchDY = 0;
     }
 });
 
@@ -239,6 +282,20 @@ function renderWorld() {
 
 // === MAIN LOOP ===
 function loop() {
+    // === INERTIA UPDATE ===
+    if (!isDragging && !isTouchDragging) {
+        if (Math.abs(velocityX) > 0.1 || Math.abs(velocityY) > 0.1) {
+            camera.x -= velocityX;
+            camera.y -= velocityY;
+            clampCamera();
+
+            velocityX *= inertiaDamping;
+            velocityY *= inertiaDamping;
+        } else {
+            velocityX = 0;
+            velocityY = 0;
+        }
+    }
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     renderWorld();
     requestAnimationFrame(loop);
