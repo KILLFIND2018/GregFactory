@@ -15,11 +15,12 @@ let tileSize = baseTileSize * zoom;
 let velocityX = 0;
 let velocityY = 0;
 
-const inertiaDamping = 0.92;   // скорость затухания
-const velocityMax = 50;        // ограничение инерции (px/frame)
+let lastMouseX = 0;
+let lastMouseY = 0;
 
-let lastDX = 0;
-let lastDY = 0;
+
+const inertiaDamping = 0.94;   // скорость затухания
+const velocityMax = 60;        // ограничение инерции (px/frame)
 
 
 
@@ -30,18 +31,6 @@ const camera = {
     screenCenterX: 0,
     screenCenterY: 0
 };
-
-// === WORLD CONFIG ===
-const WORLD_WIDTH = 16 * 16;   // тайлов
-const WORLD_HEIGHT = 16 * 16;  // тайлов
-
-// === WORLD GENERATION ===
-const world = [];
-for (let y = 0; y < WORLD_HEIGHT; y++) {
-    const row = [];
-    for (let x = 0; x < WORLD_WIDTH; x++) row.push(1);
-    world.push(row);
-}
 
 // === RESIZE ===
 function onResize() {
@@ -58,11 +47,7 @@ window.addEventListener("resize", onResize);
 
 // === CAMERA LIMITS ===
 function clampCamera() {
-    const maxX = WORLD_WIDTH * tileSize - canvas.width;
-    const maxY = WORLD_HEIGHT * tileSize - canvas.height;
 
-    camera.x = Math.max(0, Math.min(camera.x, maxX));
-    camera.y = Math.max(0, Math.min(camera.y, maxY));
 }
 
 // === ZOOM ===
@@ -97,51 +82,44 @@ canvas.addEventListener("wheel", (e) => {
 
 // === DRAG (как Google Maps) ===
 let isDragging = false;
-let dragStartX = 0;
-let dragStartY = 0;
-let cameraStartX = 0;
-let cameraStartY = 0;
+
 
 canvas.addEventListener("mousedown", (e) => {
     if (e.button !== 0) return;
+
     isDragging = true;
 
-    dragStartX = e.clientX;
-    dragStartY = e.clientY;
+    lastMouseX = e.clientX;
+    lastMouseY = e.clientY;
 
-    cameraStartX = camera.x;
-    cameraStartY = camera.y;
+    velocityX = 0;
+    velocityY = 0;
 });
+
 
 window.addEventListener("mouseup", () => {
     isDragging = false;
-    //Добавляем переменные для пк-drag
-    lastDX = 0;
-    lastDY = 0;
 });
 
 window.addEventListener("mousemove", (e) => {
     if (!isDragging) return;
 
-    const dx = e.clientX - dragStartX;
-    const dy = e.clientY - dragStartY;
+    const dx = e.clientX - lastMouseX;
+    const dy = e.clientY - lastMouseY;
 
-    camera.x = cameraStartX - dx;
-    camera.y = cameraStartY - dy;
+    camera.x -= dx;
+    camera.y -= dy;
 
-    // скорость — разница между текущим и прошлым кадром
-    velocityX = (dx - lastDX) * 0.5;
-    velocityY = (dy - lastDY) * 0.5;
+    velocityX = dx;
+    velocityY = dy;
 
-    // ограничение скорости
     velocityX = Math.max(-velocityMax, Math.min(velocityX, velocityMax));
     velocityY = Math.max(-velocityMax, Math.min(velocityY, velocityMax));
 
-    lastDX = dx;
-    lastDY = dy;
-
-    clampCamera();
+    lastMouseX = e.clientX;
+    lastMouseY = e.clientY;
 });
+
 
 // === TOUCH CONTROLS ===
 let isTouchDragging = false;
@@ -254,52 +232,108 @@ canvas.addEventListener("touchend", () => {
     }
 });
 
-// === DRAW TILE ===
-function drawTile(x, y) {
+// === DRAW LAYER TILE ===
+function drawTile(tile, x, y) {
     const screenX = x * tileSize - camera.x;
     const screenY = y * tileSize - camera.y;
 
-    ctx.fillStyle = "#2ecc71";
-    ctx.fillRect(screenX, screenY, tileSize - 1, tileSize - 1);
+    // === SOIL ===
+    if (tile.soil === "sand") ctx.fillStyle = "#fbc02d";
+    else ctx.fillStyle = "#8d6e63";
+
+    ctx.fillRect(screenX, screenY, tileSize, tileSize);
+
+    // === SURFACE ===
+    if (tile.surface === "grass") {
+        ctx.fillStyle = "#4caf50";
+        ctx.fillRect(screenX, screenY, tileSize, tileSize);
+    }
+
+    // === WATER ===
+    if (tile.fluid && tile.fluid.type === "water") {
+        ctx.fillStyle = "rgba(0,150,255,0.6)";
+        ctx.fillRect(screenX, screenY, tileSize, tileSize);
+    }
 }
 
-// === RENDER WORLD ===
+
+// === RENDER CHUNK WORLD ===
 function renderWorld() {
-    const startX = Math.floor(camera.x / tileSize);
-    const startY = Math.floor(camera.y / tileSize);
 
-    const endX = startX + visibleTilesX;
-    const endY = startY + visibleTilesY;
+    const VIEW_RADIUS = 40; // оптимально для старта
 
-    for (let y = startY; y < endY; y++) {
-        for (let x = startX; x < endX; x++) {
-            if (world[y] && world[y][x] !== undefined) {
-                drawTile(x, y);
-            }
+    const centerTileX = Math.floor((camera.x + canvas.width / 2) / tileSize);
+    const centerTileY = Math.floor((camera.y + canvas.height / 2) / tileSize);
+
+    const startTileX = centerTileX - VIEW_RADIUS;
+    const startTileY = centerTileY - VIEW_RADIUS;
+    const endTileX   = centerTileX + VIEW_RADIUS;
+    const endTileY   = centerTileY + VIEW_RADIUS;
+
+
+    for (let ty = startTileY; ty < endTileY; ty++) {
+        for (let tx = startTileX; tx < endTileX; tx++) {
+
+            const cx = Math.floor(tx / WorldGen.CHUNK_SIZE);
+            const cy = Math.floor(ty / WorldGen.CHUNK_SIZE);
+
+            const lx = ((tx % WorldGen.CHUNK_SIZE) + WorldGen.CHUNK_SIZE) % WorldGen.CHUNK_SIZE;
+            const ly = ((ty % WorldGen.CHUNK_SIZE) + WorldGen.CHUNK_SIZE) % WorldGen.CHUNK_SIZE;
+
+            const chunk = getChunk(cx, cy);
+            const tile = chunk[ly][lx];
+
+            drawTile(tile, tx, ty);
         }
     }
 }
 
+// === HOT CHUNK ===
+function warmupChunks() {
+    for (let cy = -2; cy <= 2; cy++) {
+        for (let cx = -2; cx <= 2; cx++) {
+            getChunk(cx, cy);
+        }
+    }
+}
+
+
 // === MAIN LOOP ===
+
 function loop() {
     // === INERTIA UPDATE ===
     if (!isDragging && !isTouchDragging) {
-        if (Math.abs(velocityX) > 0.1 || Math.abs(velocityY) > 0.1) {
-            camera.x -= velocityX;
-            camera.y -= velocityY;
-            clampCamera();
+        camera.x -= velocityX;
+        camera.y -= velocityY;
 
-            velocityX *= inertiaDamping;
-            velocityY *= inertiaDamping;
-        } else {
-            velocityX = 0;
-            velocityY = 0;
-        }
+        velocityX *= inertiaDamping;
+        velocityY *= inertiaDamping;
+
+        if (Math.abs(velocityX) < 0.05) velocityX = 0;
+        if (Math.abs(velocityY) < 0.05) velocityY = 0;
     }
+
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     renderWorld();
     requestAnimationFrame(loop);
 }
 
+
+
+
+const chunkCache = new Map();
+
+function getChunk(cx, cy) {
+    const key = cx + "," + cy;
+
+    if (!chunkCache.has(key)) {
+        chunkCache.set(key, WorldGen.generateChunk(cx, cy));
+    }
+
+    return chunkCache.get(key);
+}
+
+
 onResize();
+warmupChunks();
 loop();

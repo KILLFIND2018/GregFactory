@@ -23,6 +23,7 @@
     @vite('resources/js/app.js')
     -->
     <canvas id="game"></canvas>
+    <script src="/js/worldGen.js"></script>
     <script src="/js/game.js"></script>
 
 
