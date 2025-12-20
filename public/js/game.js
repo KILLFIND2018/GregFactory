@@ -260,7 +260,18 @@ function drawTile(tile, x, y) {
 // === RENDER CHUNK WORLD ===
 function renderWorld() {
 
-    const VIEW_RADIUS = 40; // оптимально для старта
+    if (tileSize <= 0 || !isFinite(tileSize)) return;
+
+    //VIEW_RADIUS должен зависеть от зума и экрана
+    const tilesOnScreenX = canvas.width / tileSize;
+    const tilesOnScreenY = canvas.height / tileSize;
+
+    const VIEW_RADIUS = Math.ceil(
+        Math.max(tilesOnScreenX, tilesOnScreenY) / 2
+    ) + 4; // запас
+
+
+
 
     const centerTileX = Math.floor((camera.x + canvas.width / 2) / tileSize);
     const centerTileY = Math.floor((camera.y + canvas.height / 2) / tileSize);
