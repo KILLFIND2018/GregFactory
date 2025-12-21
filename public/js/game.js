@@ -221,11 +221,11 @@ canvas.addEventListener("touchmove", (e) => {
     }
 }, { passive: false });
 
-canvas.addEventListener("touchend", () => {
-    if (event.touches.length < 2) {
+canvas.addEventListener("touchend", (e) => {
+    if (e.touches.length < 2) {
         lastPinchDist = null;
     }
-    if (event.touches.length === 0) {
+    if (e.touches.length === 0) {
         isTouchDragging = false;
         lastTouchDX = 0;
         lastTouchDY = 0;
@@ -259,6 +259,12 @@ function drawTile(tile, x, y) {
 
 // === RENDER CHUNK WORLD ===
 function renderWorld() {
+
+    if (typeof WorldGen === "undefined") {
+        console.error("WorldGen missing");
+        return;
+    }
+
 
     if (tileSize <= 0 || !isFinite(tileSize)) return;
 
@@ -297,6 +303,7 @@ function renderWorld() {
             drawTile(tile, tx, ty);
         }
     }
+
 }
 
 // === HOT CHUNK ===
@@ -310,8 +317,13 @@ function warmupChunks() {
 
 
 // === MAIN LOOP ===
+let warmupDone = false;
+
 
 function loop() {
+
+
+
     // === INERTIA UPDATE ===
     if (!isDragging && !isTouchDragging) {
         camera.x -= velocityX;
@@ -325,7 +337,18 @@ function loop() {
     }
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    ctx.fillStyle = "#000000";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
     renderWorld();
+
+    if (!warmupDone) {
+        warmupDone = true;
+        setTimeout(() => {
+            warmupChunks();
+        }, 0);
+    }
     requestAnimationFrame(loop);
 }
 
@@ -344,7 +367,12 @@ function getChunk(cx, cy) {
     return chunkCache.get(key);
 }
 
+document.addEventListener("DOMContentLoaded", () => {
+    onResize();
+    requestAnimationFrame(loop);
 
-onResize();
-warmupChunks();
-loop();
+});
+
+
+
+
