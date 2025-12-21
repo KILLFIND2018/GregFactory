@@ -232,52 +232,42 @@ canvas.addEventListener("touchend", (e) => {
     }
 });
 
+//Pattern render world
+
+function getTileColor(tile) {
+    switch (tile.surface) {
+        case "water": return "#3a6ea5";
+        case "sand":  return "#e5d38a";
+        case "grass": return "#4caf50";
+        case "stone": return "#888888";
+        default: return "#000";
+    }
+}
+
+
 // === DRAW LAYER TILE ===
 function drawTile(tile, x, y) {
     const screenX = x * tileSize - camera.x;
     const screenY = y * tileSize - camera.y;
 
-    // === SOIL ===
-    if (tile.soil === "sand") ctx.fillStyle = "#fbc02d";
-    else ctx.fillStyle = "#8d6e63";
-
+    ctx.fillStyle = getTileColor(tile);
     ctx.fillRect(screenX, screenY, tileSize, tileSize);
-
-    // === SURFACE ===
-    if (tile.surface === "grass") {
-        ctx.fillStyle = "#4caf50";
-        ctx.fillRect(screenX, screenY, tileSize, tileSize);
-    }
-
-    // === WATER ===
-    if (tile.fluid && tile.fluid.type === "water") {
-        ctx.fillStyle = "rgba(0,150,255,0.6)";
-        ctx.fillRect(screenX, screenY, tileSize, tileSize);
-    }
 }
+
 
 
 // === RENDER CHUNK WORLD ===
 function renderWorld() {
+    if (typeof WorldGen === "undefined") return;
+    if (!isFinite(tileSize) || tileSize <= 0) return;
 
-    if (typeof WorldGen === "undefined") {
-        console.error("WorldGen missing");
-        return;
-    }
-
-
-    if (tileSize <= 0 || !isFinite(tileSize)) return;
-
-    //VIEW_RADIUS должен зависеть от зума и экрана
+    // динамический радиус от зума и экрана
     const tilesOnScreenX = canvas.width / tileSize;
     const tilesOnScreenY = canvas.height / tileSize;
 
     const VIEW_RADIUS = Math.ceil(
         Math.max(tilesOnScreenX, tilesOnScreenY) / 2
-    ) + 4; // запас
-
-
-
+    ) + 2;
 
     const centerTileX = Math.floor((camera.x + canvas.width / 2) / tileSize);
     const centerTileY = Math.floor((camera.y + canvas.height / 2) / tileSize);
@@ -287,9 +277,8 @@ function renderWorld() {
     const endTileX   = centerTileX + VIEW_RADIUS;
     const endTileY   = centerTileY + VIEW_RADIUS;
 
-
-    for (let ty = startTileY; ty < endTileY; ty++) {
-        for (let tx = startTileX; tx < endTileX; tx++) {
+    for (let ty = startTileY; ty <= endTileY; ty++) {
+        for (let tx = startTileX; tx <= endTileX; tx++) {
 
             const cx = Math.floor(tx / WorldGen.CHUNK_SIZE);
             const cy = Math.floor(ty / WorldGen.CHUNK_SIZE);
@@ -303,8 +292,8 @@ function renderWorld() {
             drawTile(tile, tx, ty);
         }
     }
-
 }
+
 
 // === HOT CHUNK ===
 function warmupChunks() {

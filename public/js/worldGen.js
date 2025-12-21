@@ -8,48 +8,37 @@ window.WorldGen = (() => {
         let x = Math.sin(seed) * 10000;
         return x - Math.floor(x);
     }
+    //Счетчик высоты в каждой клетке
+    function heightNoise(x, y) {
+        // простая детерминированная "высота"
+        return rand(x * 734287 + y * 912931);
+    }
+    //Биом считаем по высоте
+    function getBiome(h) {
+        if (h < 0.3) return "ocean";
+        if (h < 0.45) return "shore";
+        if (h < 0.7) return "plains";
+        return "mountains";
+    }
 
     function generateTile(wx, wy) {
-        // базовые слои
+        const h = heightNoise(wx, wy);
+        const biome = getBiome(h);
+
         let surface = "grass";
-        let soil = "dirt";
-        let fluid = null;
 
-        // простая "высота"
-        const h = rand(wx * 928371 + wy * 12377);
-
-        if (h < 0.2) {
-            surface = "sand";
-            soil = "sand";
-            fluid = { type: "water" };
-        }
-
-        if (h > 0.8) {
-            surface = "stone";
-            soil = "stone";
-        }
-
-        // логические слои (пока не рендерим)
-        let oreVein = null;
-        if (rand(wx * 9999 + wy * 7777) > 0.97) {
-            oreVein = {
-                type: "iron_vein",
-                blocksLeft: 4
-            };
-        }
+        if (biome === "ocean") surface = "water";
+        else if (biome === "shore") surface = "sand";
+        else if (biome === "plains") surface = "grass";
+        else if (biome === "mountains") surface = "stone";
 
         return {
             surface,
-            soil,
-            fluid,
-            structure: null,
-
-            // логика
-            oreVein,
-            bedrock: true
+            biome
         };
     }
 
+    //Генерация чанка
     function generateChunk(cx, cy) {
         const chunk = [];
 
