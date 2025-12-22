@@ -82,29 +82,115 @@ window.WorldGen = (() => {
         return "plains";
     }
 
-    //определение реки
+    //определение реки РЕКА / RIVER
 
-    function riverNoise(x, y) {
+    //кешируем реку при проверке истока
+    const riverCache = new Map();
+
+    function riverKey(x, y) {
+        return `${x},${y}`;
+    }
+
+    function isRiverTile(x, y, biome, height) {
+        const key = riverKey(x, y);
+        if (riverCache.has(key)) return riverCache.get(key);
+
+        let result = false;
+
+        if (biome !== "ocean") {
+            const width = 1; // пока фикс
+            for (let dy = -width; dy <= width; dy++) {
+                for (let dx = -width; dx <= width; dx++) {
+                    if (isRiverCore(x + dx, y + dy, biome, height)) {
+                        result = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        riverCache.set(key, result);
+        return result;
+    }
+
+
+
+
+    //Исток реки, старт в горках
+    function riverSourceNoise(x, y) {
         return rand(
-            Math.floor(x / 32) * 987654 +
-            Math.floor(y / 32) * 456789
+            Math.floor(x / 64) * 999001 +
+            Math.floor(y / 64) * 777013
+        );
+    }
+    //начало реки
+    function isRiverSource(x, y, biome, height) {
+        if (biome !== "mountains") return false;
+        return height > 0.6 && riverSourceNoise(x, y) > 0.92;
+    }
+
+    //центр русла
+    function isRiverCore(x, y, biome, height) {
+        if (biome === "ocean") return false;
+
+        // исток
+        if (isRiverSource(x, y, biome, height)) return true;
+
+        // только узкая линия потока
+        const dir = flowDir(x, y);
+        const px = Math.floor(x - dir.dx);
+        const py = Math.floor(y - dir.dy);
+
+        return isRiverSource(px, py, getBiomeForRegion(px, py), heightNoise(px, py));
+    }
+
+
+    //Берега для океанов, рек и озер
+
+    function isNearWater(x, y) {
+        for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+
+                const nx = x + dx;
+                const ny = y + dy;
+
+                const biome = getBiomeForRegion(nx, ny);
+                const h = heightNoise(nx, ny);
+
+                // океан
+                if (biome === "ocean") return true;
+
+                // река
+                if (isRiverTile(nx, ny, biome, h)) return true;
+            }
+        }
+        return false;
+    }
+
+    //направление потока реки
+    function flowDir(x, y) {
+        const a = rand(x * 9187 + y * 19237) * Math.PI * 2;
+        return {
+            dx: Math.cos(a),
+            dy: Math.sin(a)
+        };
+    }
+
+
+
+    //Озеро
+
+    function lakeNoise(x, y) {
+        return rand(
+            Math.floor(x / 32) * 555555 +
+            Math.floor(y / 32) * 999999
         );
     }
 
-    //Условие, что это река
-    function isRiver(x, y, biome) {
-        if (biome !== "plains" || biome === "mountains") return false;
-
-        const n = riverNoise(x, y);
-        return n > 0.45 && n < 0.55;
-    }
-
-    //ширина реки
-
-    function isNearRiver(x, y, biome) {
-        for (let dy = -1; dy <= 1; dy++) {
-            for (let dx = -1; dx <= 1; dx++) {
-                if (isRiver(x + dx, y + dy, biome)) {
+    function isNearOcean(x, y) {
+        for (let dy = -4; dy <= 4; dy++) {
+            for (let dx = -4; dx <= 4; dx++) {
+                if (getBiomeForRegion(x + dx, y + dy) === "ocean") {
                     return true;
                 }
             }
@@ -112,36 +198,17 @@ window.WorldGen = (() => {
         return false;
     }
 
-    //Сила реки
+    function isLake(x, y, biome, height) {
+        if (biome !== "plains") return false;
+        if (height > 0.5) return false;
+        if (isNearOcean(x, y)) return false;
 
-    function riverStrength(x, y) {
-        return Math.abs(riverNoise(x,y) - 0.5);
+        return lakeNoise(x, y) > 0.97;
     }
 
 
-    //Ширина зависит от силы
-    function  riverWidth(x,y) {
-        const s = riverStrength(x, y);
 
-        if (s < 0.01) return 3; // широкая река
-        if (s > 0.03) return 2; // средняя
-        return 1; //ручей
-    }
 
-    function isRiverTile(x, y, biome) {
-        if (biome === "ocean" || biome === "mountains") return false;
-
-        const width = riverWidth(x, y);
-
-        for (let dy = -width; dy <= width; dy++) {
-            for (let dx = -width; dx <= width; dx++) {
-                if (isRiver(x + dx, y + dy, biome)) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
 
 
 
@@ -151,28 +218,30 @@ window.WorldGen = (() => {
 
         let surface;
 
-        // ОКЕАН
         if (biome === "ocean") {
             surface = "water";
         }
-        // РЕКА
-        else if (isNearRiver(x, y, biome)) {
+        else if (isRiverTile(x, y, biome, h)) {
             surface = "water";
         }
-        else if (isRiverTile(x, y, biome)) {
-            surface = "water"
+        else if (isLake(x, y, biome, h)) {
+            surface = "water";
         }
-        // ГОРЫ
+        else if (isNearWater(x, y)) {
+            surface = "sand";
+        }
         else if (biome === "mountains") {
             surface = h > 0.55 ? "stone" : "grass";
         }
-        // РАВНИНЫ
         else {
             surface = h < 0.33 ? "sand" : "grass";
         }
 
         return { surface, biome };
     }
+
+
+
 
 
 
