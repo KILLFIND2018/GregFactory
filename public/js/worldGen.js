@@ -82,8 +82,66 @@ window.WorldGen = (() => {
         return "plains";
     }
 
+    //определение реки
+
+    function riverNoise(x, y) {
+        return rand(
+            Math.floor(x / 32) * 987654 +
+            Math.floor(y / 32) * 456789
+        );
+    }
+
+    //Условие, что это река
+    function isRiver(x, y, biome) {
+        if (biome !== "plains" || biome === "mountains") return false;
+
+        const n = riverNoise(x, y);
+        return n > 0.45 && n < 0.55;
+    }
+
+    //ширина реки
+
+    function isNearRiver(x, y, biome) {
+        for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+                if (isRiver(x + dx, y + dy, biome)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    //Сила реки
+
+    function riverStrength(x, y) {
+        return Math.abs(riverNoise(x,y) - 0.5);
+    }
 
 
+    //Ширина зависит от силы
+    function  riverWidth(x,y) {
+        const s = riverStrength(x, y);
+
+        if (s < 0.01) return 3; // широкая река
+        if (s > 0.03) return 2; // средняя
+        return 1; //ручей
+    }
+
+    function isRiverTile(x, y, biome) {
+        if (biome === "ocean" || biome === "mountains") return false;
+
+        const width = riverWidth(x, y);
+
+        for (let dy = -width; dy <= width; dy++) {
+            for (let dx = -width; dx <= width; dx++) {
+                if (isRiver(x + dx, y + dy, biome)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
 
 
 
@@ -93,18 +151,29 @@ window.WorldGen = (() => {
 
         let surface;
 
+        // ОКЕАН
         if (biome === "ocean") {
             surface = "water";
         }
+        // РЕКА
+        else if (isNearRiver(x, y, biome)) {
+            surface = "water";
+        }
+        else if (isRiverTile(x, y, biome)) {
+            surface = "water"
+        }
+        // ГОРЫ
         else if (biome === "mountains") {
             surface = h > 0.55 ? "stone" : "grass";
         }
-        else { // plains
+        // РАВНИНЫ
+        else {
             surface = h < 0.33 ? "sand" : "grass";
         }
 
         return { surface, biome };
     }
+
 
 
 

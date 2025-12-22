@@ -236,13 +236,17 @@ canvas.addEventListener("touchend", (e) => {
 
 function getTileColor(tile) {
     switch (tile.surface) {
-        case "water": return "#3a6ea5";
+        case "water":
+            return tile.biome === "ocean"
+                ? "#3a6ea5"
+                : "#2e8bff";
         case "sand":  return "#e5d38a";
         case "grass": return "#4caf50";
         case "stone": return "#888888";
         default: return "#000";
     }
 }
+
 
 
 // === DRAW LAYER TILE ===
