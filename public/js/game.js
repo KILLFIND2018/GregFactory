@@ -12,6 +12,12 @@ let tileSize = baseTileSize * zoom;
 
 // GLOBAL SPEED VARIABLES
 
+// === WORLD / CHUNKS ===
+const CHUNK_SIZE = 16;
+
+const chunkCache = new Map();     // загруженные чанки
+const loadingChunks = new Set();  // чанки в процессе загрузки
+
 let velocityX = 0;
 let velocityY = 0;
 
@@ -232,6 +238,93 @@ canvas.addEventListener("touchend", (e) => {
     }
 });
 
+
+
+async function loadChunk(cx, cy) {
+    const key = cx + "," + cy;
+
+    if (chunkCache.has(key) || loadingChunks.has(key)) return;
+
+    loadingChunks.add(key);
+
+    try {
+        const res = await fetch(`/api/chunk?cx=${cx}&cy=${cy}`);
+        const data = await res.json();
+
+        if (data && data.tiles) {
+            chunkCache.set(key, data.tiles);
+        }
+    } catch (e) {
+        console.error("Chunk load error", cx, cy, e);
+    } finally {
+        loadingChunks.delete(key);
+    }
+}
+
+const chunkQueue = [];
+const MAX_CONCURRENT_REQUESTS = 6;
+let activeRequests = 0;
+
+function enqueueChunk(cx, cy, priority) {
+    const key = cx + "," + cy;
+
+    if (chunkCache.has(key) || loadingChunks.has(key)) return;
+
+    loadingChunks.add(key);
+
+    chunkQueue.push({ cx, cy, priority });
+
+    // ближние чанки — первыми
+    chunkQueue.sort((a, b) => a.priority - b.priority);
+}
+//Загрузка по очереди
+async function processChunkQueue() {
+    if (activeRequests >= MAX_CONCURRENT_REQUESTS) return;
+    if (chunkQueue.length === 0) return;
+
+    const { cx, cy } = chunkQueue.shift();
+    const key = cx + "," + cy;
+
+    activeRequests++;
+
+    try {
+        const res = await fetch(`/api/chunk?cx=${cx}&cy=${cy}`);
+        const data = await res.json();
+        chunkCache.set(key, {
+            tiles: data.tiles,
+            loadedAt: performance.now()
+        });
+
+    } catch (e) {
+        console.error("Chunk load error", cx, cy);
+    } finally {
+        loadingChunks.delete(key);
+        activeRequests--;
+    }
+}
+//PRELOAD CHUNKS
+function preloadInitialChunks() {
+    const centerTileX = Math.floor((camera.x + canvas.width / 2) / tileSize);
+    const centerTileY = Math.floor((camera.y + canvas.height / 2) / tileSize);
+
+    const centerChunkX = Math.floor(centerTileX / CHUNK_SIZE);
+    const centerChunkY = Math.floor(centerTileY / CHUNK_SIZE);
+
+    const PRELOAD_RADIUS = 3; // 3 чанка вокруг центра
+
+    for (let dy = -PRELOAD_RADIUS; dy <= PRELOAD_RADIUS; dy++) {
+        for (let dx = -PRELOAD_RADIUS; dx <= PRELOAD_RADIUS; dx++) {
+
+            const cx = centerChunkX + dx;
+            const cy = centerChunkY + dy;
+
+            const priority = Math.abs(dx) + Math.abs(dy);
+            enqueueChunk(cx, cy, priority);
+        }
+    }
+}
+
+
 //Pattern render world
 
 function getTileColor(tile) {
@@ -262,10 +355,8 @@ function drawTile(tile, x, y) {
 
 // === RENDER CHUNK WORLD ===
 function renderWorld() {
-    if (typeof WorldGen === "undefined") return;
     if (!isFinite(tileSize) || tileSize <= 0) return;
 
-    // динамический радиус от зума и экрана
     const tilesOnScreenX = canvas.width / tileSize;
     const tilesOnScreenY = canvas.height / tileSize;
 
@@ -284,29 +375,43 @@ function renderWorld() {
     for (let ty = startTileY; ty <= endTileY; ty++) {
         for (let tx = startTileX; tx <= endTileX; tx++) {
 
-            const cx = Math.floor(tx / WorldGen.CHUNK_SIZE);
-            const cy = Math.floor(ty / WorldGen.CHUNK_SIZE);
+            const cx = Math.floor(tx / CHUNK_SIZE);
+            const cy = Math.floor(ty / CHUNK_SIZE);
 
-            const lx = ((tx % WorldGen.CHUNK_SIZE) + WorldGen.CHUNK_SIZE) % WorldGen.CHUNK_SIZE;
-            const ly = ((ty % WorldGen.CHUNK_SIZE) + WorldGen.CHUNK_SIZE) % WorldGen.CHUNK_SIZE;
+            const lx = ((tx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+            const ly = ((ty % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
 
-            const chunk = getChunk(cx, cy);
-            const tile = chunk[ly][lx];
+            const key = cx + "," + cy;
+            const chunkData = chunkCache.get(key);
 
+            if (!chunkData) {
+                // асинхронно грузим
+                const dx = cx - Math.floor(centerTileX / CHUNK_SIZE);
+                const dy = cy - Math.floor(centerTileY / CHUNK_SIZE);
+                const priority = Math.abs(dx) + Math.abs(dy);
+
+                enqueueChunk(cx, cy, priority);
+
+                continue;
+            }
+
+            const fadeDuration = 300; // ms
+
+            const age = performance.now() - chunkData.loadedAt;
+            ctx.globalAlpha = Math.min(age / fadeDuration, 1);
+
+            const tile = chunkData.tiles[ly][lx];
             drawTile(tile, tx, ty);
+
+            ctx.globalAlpha = 1;
+
         }
     }
 }
 
 
-// === HOT CHUNK ===
-function warmupChunks() {
-    for (let cy = -2; cy <= 2; cy++) {
-        for (let cx = -2; cx <= 2; cx++) {
-            getChunk(cx, cy);
-        }
-    }
-}
+
+
 
 
 // === MAIN LOOP ===
@@ -314,8 +419,6 @@ let warmupDone = false;
 
 
 function loop() {
-
-
 
     // === INERTIA UPDATE ===
     if (!isDragging && !isTouchDragging) {
@@ -329,6 +432,9 @@ function loop() {
         if (Math.abs(velocityY) < 0.05) velocityY = 0;
     }
 
+    // 🔥 Обрабатываем очередь чанков (1 раз за кадр)
+    processChunkQueue();
+
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     ctx.fillStyle = "#000000";
@@ -336,35 +442,32 @@ function loop() {
 
     renderWorld();
 
-    if (!warmupDone) {
-        warmupDone = true;
-        setTimeout(() => {
-            warmupChunks();
-        }, 0);
-    }
     requestAnimationFrame(loop);
 }
 
 
 
 
-const chunkCache = new Map();
 
-function getChunk(cx, cy) {
-    const key = cx + "," + cy;
 
-    if (!chunkCache.has(key)) {
-        chunkCache.set(key, WorldGen.generateChunk(cx, cy));
-    }
-
-    return chunkCache.get(key);
-}
 
 document.addEventListener("DOMContentLoaded", () => {
     onResize();
+    preloadInitialChunks();
     requestAnimationFrame(loop);
 
 });
+
+function regenerateWorld() {
+    chunkCache.clear();
+}
+
+window.addEventListener("keydown", (e) => {
+    if (e.key.toLowerCase() === "r") {
+        regenerateWorld();
+    }
+});
+
 
 
 
