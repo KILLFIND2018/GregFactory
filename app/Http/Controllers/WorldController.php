@@ -17,11 +17,14 @@ class WorldController extends Controller
             config('world.chunk_size')
         );
 
-        $key = "chunk_{$cx}_{$cy}";
+        // 🔥 ВОТ ЗДЕСЬ КЕШ
+        $tiles = cache()->rememberForever(
+            "chunk_{$cx}_{$cy}",
+            function () use ($generator, $cx, $cy) {
+                return $generator->generateChunk($cx, $cy);
+            }
+        );
 
-        $tiles = cache()->remember($key, 3600, function () use ($generator, $cx, $cy) {
-            return $generator->generateChunk($cx, $cy);
-        });
 
         return response()->json([
             'cx' => $cx,

@@ -336,6 +336,7 @@ function getTileColor(tile) {
         case "sand":  return "#e5d38a";
         case "grass": return "#4caf50";
         case "stone": return "#888888";
+        case "gray_stone" : return "#635d5d";
         default: return "#000";
     }
 }

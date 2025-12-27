@@ -34,8 +34,8 @@ class WorldGenerator
 
     private function generateTile(int $x, int $y): array
     {
-        // Континенты (где вообще есть суша)
-        $continent = Noise::valueNoise($x, $y, 512, $this->seed);
+        // 1. Континенты
+        $continent = Noise::valueNoise($x, $y, 256, $this->seed);
 
         if ($continent < 0.45) {
             return [
@@ -44,30 +44,55 @@ class WorldGenerator
             ];
         }
 
-        // Высота внутри континента
-        $h = 0;
-        $h += Noise::valueNoise($x, $y, 256, $this->seed + 1) * 0.6;
-        $h += Noise::valueNoise($x, $y, 64,  $this->seed + 2) * 0.3;
-        $h += Noise::valueNoise($x, $y, 16,  $this->seed + 3) * 0.1;
+        // 2. Базовая высота
+        $baseHeight = Noise::valueNoise($x, $y, 128, $this->seed + 1);
 
-        if ($h > 0.8) {
+        // 3. Горная маска (крупная)
+        $mountainMask = Noise::valueNoise($x, $y, 192, $this->seed + 2);
+
+        $mountainStrength = max(0, ($mountainMask - 0.3));
+
+        // Горы ближе к океану
+        $inlandFactor = min(1, ($continent - 0.42) * 3);
+        $mountainStrength *= $inlandFactor;
+
+        // Итоговая высота
+        $height = $baseHeight + $mountainStrength * 1.4;
+
+        // === ВЕРШИНЫ ===
+        if ($height > 0.85) {
             return [
                 'surface' => 'stone',
                 'biome' => 'mountains'
             ];
         }
 
-        if ($h < 0.3) {
+        // === ХОЛМЫ ===
+        if ($height > 0.65) {
             return [
-                'surface' => 'sand',
-                'biome' => 'plains'
+                'surface' => 'gray_stone',
+                'biome' => 'hills'
             ];
         }
 
+        // === ПЛЯЖ ===
+        if ($continent < 0.52) {
+            return [
+                'surface' => 'sand',
+                'biome' => 'beach'
+            ];
+        }
+
+        // === РАВНИНЫ ===
         return [
             'surface' => 'grass',
             'biome' => 'plains'
         ];
     }
+
+
+
+
+
 
 }
