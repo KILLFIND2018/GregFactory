@@ -36,6 +36,11 @@ class Noise
         );
     }
 
+    public static function smoothstep($edge0, $edge1, $x) {
+        $t = max(0, min(1, ($x - $edge0) / ($edge1 - $edge0)));
+        return $t * $t * (3 - 2 * $t);
+    }
+
     private static function grad(int $hash, float $x, float $y): float {
         $h = $hash & 15;
         return (($h < 8 ? $x : $y) * (($h & 1) ? -1 : 1)) +

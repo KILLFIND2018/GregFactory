@@ -267,18 +267,18 @@ function processChunkQueue() {
 // Colors
 function getTileColor(tile) {
     const colors = {
-        'water': '#1e90ff',
-        'deep_ocean': '#00008b',
-        'grass': '#567d46',
-        'grass_cold': '#7a947a', // Новый цвет для тайги
-        'grass_jungle': '#1d4d12', // Новый цвет для джунглей
-        'dry_grass': '#91a06d',
-        'sand': '#edc9af',
-        'stone': '#808080',
-        'snow': '#ffffff',
-        'default': '#ff00ff'
+        'deep_ocean':   '#001a33', // Почти черный синий
+        'water':        '#1e90ff', // Классическая вода
+        'sand':         '#e3c18b', // Пляжный песок
+        'beach_sand':   '#f49b0c',
+        'grass':        '#567d46',
+        'trees':        '#4be40b',
+        'grass_cold':   '#6a8a6a',
+        'dry_grass':    '#91a06d',
+        'stone':        '#7a7a7a',
+        'snow':         '#ffffff',
+        'default':      '#ff00ff'
     };
-    // Используем tile.s вместо tile.surface
     return colors[tile.s] || colors['default'];
 }
 
