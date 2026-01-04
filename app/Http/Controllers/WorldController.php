@@ -8,25 +8,28 @@ use Illuminate\Support\Facades\Cache;
 
 class WorldController extends Controller
 {
+    // app/Http/Controllers/WorldController.php
+
     public function chunk(Request $request)
     {
-        $request->validate([
-            'cx' => 'required|integer',
-            'cy' => 'required|integer',
-            'seed' => 'integer',
-        ]);
-
-        $cx = (int) $request->query('cx');
-        $cy = (int) $request->query('cy');
+        $coords = $request->query('batch');
         $seed = (int) ($request->query('seed') ?? 12345);
 
+        // Инициализируем генератор
         $generator = new WorldGenerator($seed);
 
-        // Временно убираем кэш, чтобы видеть изменения в реальном времени
-        $tiles = $generator->generateChunk($cx, $cy);
+        $results = [];
+        if (!empty($coords)) {
+            foreach (explode(';', $coords) as $coord) {
+                // Проверяем, что в координатах есть и X и Y
+                $parts = explode(',', $coord);
+                if (count($parts) === 2) {
+                    [$cx, $cy] = $parts;
+                    $results[$coord] = $generator->generateChunk((int)$cx, (int)$cy);
+                }
+            }
+        }
 
-        return response()->json([
-            'tiles' => $tiles
-        ]);
+        return response()->json($results);
     }
 }

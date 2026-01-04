@@ -7,10 +7,14 @@ class WorldGenerator
     private int $seed;
     private int $chunkSize;
 
+    // app/Services/World/WorldGenerator.php
+
     public function __construct(int $seed, int $chunkSize = 16)
     {
         $this->seed = $seed;
         $this->chunkSize = $chunkSize;
+        // ОБЯЗАТЕЛЬНО: инициализируем таблицу шумов этим сидом
+        Noise::init($seed);
     }
 
     public function generateChunk(int $cx, int $cy): array
@@ -32,43 +36,35 @@ class WorldGenerator
 
     private function generateTile(int $x, int $y): array
     {
-        // 1. Оптимизация: используем один вызов шума для биома и высоты, если можно
-        // Снижаем октавы для второстепенных шумов
-        $biomeNoise = Noise::fbm($x, $y, 1024, $this->seed, 4, 0.5, 2.0); // Было 6 октав
+        $h = Noise::fbm($x, $y, 140, 4); // Высота
+        $t = Noise::fbm($x, $y, 500, 2); // Температура (всего 2 октавы!)
+        $m = Noise::fbm($x, $y, 500, 2); // Влажность
 
-        // 2. Высота - самый важный параметр
-        $height = Noise::fbm($x, $y, 128, $this->seed + 1, 4, 0.6, 2.2); // Было 5
+        if ($h < 0.3) return ['s' => 'water', 'b' => 'ocean'];
 
-        // 3. Используем упрощенный шум для маски гор
-        $mountainMask = Noise::valueNoise($x, $y, 192, $this->seed + 2);
-        if ($mountainMask > 0.6) {
-            $height += ($mountainMask - 0.6) * 1.5;
-        }
+        $isCold = $t < 0.3;
+        $isHot = $t > 0.7;
+        $isDry = $m < 0.3;
 
-        // 4. Температуру и влажность считаем только если мы не в океане (Экономия CPU)
-        $biome = 'plains';
-        if ($biomeNoise < 0.3) {
-            $biome = 'ocean';
-        } else {
-            $temperature = Noise::valueNoise($x, $y, 512, $this->seed + 3);
-            $moisture = Noise::valueNoise($x, $y, 512, $this->seed + 4);
-
-            if ($temperature > 0.7 && $moisture < 0.3) $biome = 'desert';
-            elseif ($temperature < 0.3 && $moisture > 0.7) $biome = 'taiga';
-            elseif ($moisture > 0.6) $biome = 'forest';
-        }
-
-        // Финализация типа тайла
         $surface = 'grass';
-        if ($biome === 'ocean') $surface = 'water';
-        elseif ($height > 0.8) $surface = 'stone';
-        elseif ($biome === 'desert') $surface = 'sand';
-        elseif ($biomeNoise < 0.32) $surface = 'sand'; // Берег
+        $biome = 'plains';
+
+        if ($h > 0.8) {
+            $surface = $isCold ? 'snow' : 'stone';
+            $biome = 'mountains';
+        } elseif ($isHot && $isDry) {
+            $surface = 'sand';
+            $biome = 'desert';
+        } elseif ($isCold) {
+            $surface = 'grass_cold';
+            $biome = 'taiga';
+        }
 
         return [
-            'biome' => $biome,
-            'surface' => $surface,
-            'feature' => ($biome === 'forest' && Noise::hash($x, $y, $this->seed) > 0.98) ? 'tree' : null
+            's' => $surface,
+            'b' => $biome,
+            // Используем встроенный шум для деревьев (быстрее)
+            'f' => ($surface === 'grass' && Noise::noise($x * 0.5, $y * 0.5) > 0.8) ? 'tree' : null
         ];
     }
 }

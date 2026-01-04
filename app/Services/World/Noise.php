@@ -4,71 +4,54 @@ namespace App\Services\World;
 
 class Noise
 {
-    public static function hash(int $x, int $y, int $seed): float
-    {
-        $n = $x * 374761393 + $y * 668265263 + $seed * 1447;
-        $n = ($n ^ ($n >> 13)) * 1274126177;
-        $n = $n ^ ($n >> 16);
+    private static array $p = [];
 
-        return ($n & 0xffffffff) / 4294967295;
+    // Инициализируем таблицу один раз
+    public static function init(int $seed)
+    {
+        if (!empty(self::$p)) return;
+        $p = range(0, 255);
+        mt_srand($seed);
+        shuffle($p);
+        self::$p = array_merge($p, $p);
     }
 
-    public static function lerp(float $a, float $b, float $t): float
+    public static function noise(float $x, float $y): float
     {
-        return $a + ($b - $a) * $t;
+        $X = (int)floor($x) & 255;
+        $Y = (int)floor($y) & 255;
+        $x -= floor($x); $y -= floor($y);
+
+        // Кривая smoothstep (fade)
+        $u = $x * $x * $x * ($x * ($x * 6 - 15) + 10);
+        $v = $y * $y * $y * ($y * ($y * 6 - 15) + 10);
+
+        $p = self::$p;
+        $A = $p[$X] + $Y; $B = $p[$X + 1] + $Y;
+
+        // Линейная интерполяция градиентов
+        return self::lerp($v,
+            self::lerp($u, self::grad($p[$A], $x, $y), self::grad($p[$B], $x - 1, $y)),
+            self::lerp($u, self::grad($p[$A + 1], $x, $y - 1), self::grad($p[$B + 1], $x - 1, $y - 1))
+        );
     }
 
-    public static function smoothstep(float $t): float
-    {
-        return $t * $t * (3 - 2 * $t);
+    private static function grad(int $hash, float $x, float $y): float {
+        $h = $hash & 15;
+        return (($h < 8 ? $x : $y) * (($h & 1) ? -1 : 1)) +
+            (($h < 4 ? $y : ($h == 12 || $h == 14 ? $x : 0)) * (($h & 2) ? -1 : 1));
     }
 
-    public static function fbm(
-        float $x,
-        float $y,
-        float $scale,
-        int $seed,
-        int $octaves = 4,
-        float $persistence = 0.5,
-        float $lacunarity = 2.0
-    ): float {
-        $result = 0.0;
-        $amplitude = 1.0;
-        $frequency = 1.0 / $scale;
+    private static function lerp(float $t, float $a, float $b): float {
+        return $a + $t * ($b - $a);
+    }
 
+    public static function fbm(float $x, float $y, float $scale, int $octaves): float {
+        $total = 0; $amp = 1; $freq = 1 / $scale; $max = 0;
         for ($i = 0; $i < $octaves; $i++) {
-            $result += self::valueNoise($x * $frequency, $y * $frequency, 1, $seed + $i) * $amplitude;
-            $amplitude *= $persistence;
-            $frequency *= $lacunarity;
+            $total += self::noise($x * $freq, $y * $freq) * $amp;
+            $max += $amp; $amp *= 0.5; $freq *= 2;
         }
-
-        $maxAmp = (1 - pow($persistence, $octaves)) / (1 - $persistence);
-        return $result / $maxAmp; // normalize to 0-1
-    }
-
-    public static function valueNoise(
-        float $x,
-        float $y,
-        float $scale,
-        int $seed
-    ): float {
-        $sx = $x / $scale;
-        $sy = $y / $scale;
-
-        $x0 = floor($sx);
-        $y0 = floor($sy);
-
-        $fx = self::smoothstep($sx - $x0);
-        $fy = self::smoothstep($sy - $y0);
-
-        $v00 = self::hash($x0,     $y0,     $seed);
-        $v10 = self::hash($x0 + 1, $y0,     $seed);
-        $v01 = self::hash($x0,     $y0 + 1, $seed);
-        $v11 = self::hash($x0 + 1, $y0 + 1, $seed);
-
-        $i1 = self::lerp($v00, $v10, $fx);
-        $i2 = self::lerp($v01, $v11, $fx);
-
-        return self::lerp($i1, $i2, $fy);
+        return ($total / $max + 1) / 2;
     }
 }

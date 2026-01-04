@@ -171,116 +171,118 @@ canvas.addEventListener("touchend", () => {
 
 // Chunk management
 const CHUNK_SIZE = 16;
-const MAX_CONCURRENT_REQUESTS = 10;
+const MAX_CONCURRENT_REQUESTS = 2;
 let activeRequests = 0;
 const chunkCache = new Map();
 const loadingChunks = new Set();
 const chunkQueue = [];
 let currentSeed = 12345;
+let batchQueue = [];
+
 
 function enqueueChunk(cx, cy, priority) {
     const key = `${cx},${cy}`;
     if (chunkCache.has(key) || loadingChunks.has(key) || chunkQueue.some(q => q.cx === cx && q.cy === cy)) return;
+
+    // Сразу помечаем как загружающийся
+    loadingChunks.add(key);
     chunkQueue.push({ cx, cy, priority });
     chunkQueue.sort((a, b) => a.priority - b.priority);
 }
 
-// Эту функцию можно удалить или переписать под локальные координаты
-// Но проще встроить логику прямо в отрисовку чанка:
-
-async function fetchChunk(cx, cy) {
-    const key = `${cx},${cy}`;
-    loadingChunks.add(key);
+async function fetchBatch(batch) {
     activeRequests++;
+    const batchStr = batch.map(c => `${c.cx},${c.cy}`).join(';');
+
     try {
-        const res = await fetch(`/api/chunk?cx=${cx}&cy=${cy}&seed=${currentSeed}`);
-        if (!res.ok) throw new Error('Fetch failed');
+        // Мы передаем сразу список чанков через параметр batch
+        const res = await fetch(`/api/chunk?batch=${batchStr}&seed=${currentSeed}`);
+        if (!res.ok) throw new Error('Batch fetch failed');
         const data = await res.json();
 
-        // Создаем временный холст для запекания чанка
-        const chunkCanvas = document.createElement('canvas');
-        const size = CHUNK_SIZE * baseTileSize;
-        chunkCanvas.width = size;
-        chunkCanvas.height = size;
-        const cctx = chunkCanvas.getContext('2d');
+        // Перебираем каждый чанк в ответе
+        for (const key in data) {
+            const tiles = data[key]; // Массив 16x16
 
-        // Проходим по тайлам и рисуем ИХ ЛОКАЛЬНО
-        for (let y = 0; y < CHUNK_SIZE; y++) {
-            for (let x = 0; x < CHUNK_SIZE; x++) {
-                const tile = data.tiles[y][x];
+            // Создаем холст для конкретного чанка
+            const chunkCanvas = document.createElement('canvas');
+            const size = CHUNK_SIZE * baseTileSize;
+            chunkCanvas.width = size;
+            chunkCanvas.height = size;
+            const cctx = chunkCanvas.getContext('2d');
 
-                // Раньше это было внутри drawTile
-                cctx.fillStyle = getTileColor(tile);
-                cctx.fillRect(x * baseTileSize, y * baseTileSize, baseTileSize, baseTileSize);
+            // Рисуем тайлы чанка (используем короткие ключи: s, f)
+            for (let y = 0; y < CHUNK_SIZE; y++) {
+                for (let x = 0; x < CHUNK_SIZE; x++) {
+                    const tile = tiles[y][x];
 
-                if (tile.feature === 'tree') {
-                    cctx.fillStyle = "#228B22";
-                    cctx.beginPath();
-                    cctx.arc(
-                        x * baseTileSize + baseTileSize / 2,
-                        y * baseTileSize + baseTileSize / 2,
-                        baseTileSize / 3, 0, Math.PI * 2
-                    );
-                    cctx.fill();
+                    // Отрисовка земли
+                    cctx.fillStyle = getTileColor(tile);
+                    cctx.fillRect(x * baseTileSize, y * baseTileSize, baseTileSize, baseTileSize);
+
+                    // Отрисовка объектов (feature -> f)
+                    if (tile.f === 'tree') {
+                        cctx.fillStyle = "#228B22";
+                        cctx.beginPath();
+                        cctx.arc(
+                            x * baseTileSize + baseTileSize / 2,
+                            y * baseTileSize + baseTileSize / 2,
+                            baseTileSize / 3, 0, Math.PI * 2
+                        );
+                        cctx.fill();
+                    }
                 }
             }
-        }
 
-        chunkCache.set(key, {
-            image: chunkCanvas,
-            loadedAt: performance.now()
-        });
+            // Сохраняем и картинку для отрисовки, и данные для логики
+            chunkCache.set(key, {
+                image: chunkCanvas,
+                tiles: tiles, // сохраняем данные (с короткими ключами)
+                loadedAt: performance.now()
+            });
+            loadingChunks.delete(key);
+        }
     } catch (e) {
-        console.error(`Chunk ${key} error:`, e);
+        console.error("Batch loading error:", e);
+        // В случае ошибки удаляем из списка загрузки, чтобы попробовать снова
+        batch.forEach(c => loadingChunks.delete(`${c.cx},${c.cy}`));
     } finally {
-        loadingChunks.delete(key);
         activeRequests--;
         processChunkQueue();
     }
 }
 
 function processChunkQueue() {
-    while (chunkQueue.length > 0 && activeRequests < MAX_CONCURRENT_REQUESTS) {
-        const { cx, cy } = chunkQueue.shift();
-        fetchChunk(cx, cy);
-    }
+    if (chunkQueue.length === 0 || activeRequests >= MAX_CONCURRENT_REQUESTS) return;
+
+    // Берем до 8 чанков за один раз
+    const batch = chunkQueue.splice(0, 8);
+    fetchBatch(batch);
 }
 
-// Evict far chunks
-function evictFarChunks() {
-    if (chunkCache.size > 500) {
-        const centerChunkX = Math.floor((camera.x + canvas.width / 2) / (tileSize * CHUNK_SIZE));
-        const centerChunkY = Math.floor((camera.y + canvas.height / 2) / (tileSize * CHUNK_SIZE));
-        const entries = Array.from(chunkCache.entries());
-        entries.sort((a, b) => {
-            const [ax, ay] = a[0].split(',').map(Number);
-            const [bx, by] = b[0].split(',').map(Number);
-            const da = Math.abs(ax - centerChunkX) + Math.abs(ay - centerChunkY);
-            const db = Math.abs(bx - centerChunkX) + Math.abs(by - centerChunkY);
-            return db - da; // Delete farthest first
-        });
-        for (let i = 0; i < 100; i++) { // Delete 100 farthest
-            chunkCache.delete(entries[i][0]);
-        }
-    }
-}
+
 
 
 
 // Colors
 function getTileColor(tile) {
-    switch (tile.surface) {
-        case "water":
-            return tile.biome === "ocean" ? "#3a6ea5" : "#2e8bff";
-        case "sand": return "#e5d38a";
-        case "grass":
-            if (tile.biome === 'taiga') return "#2e7d32"; // Darker green
-            return "#4caf50";
-        case "stone": return "#888888";
-        case "gray_stone": return "#635d5d";
-        default: return "#000";
-    }
+    const colors = {
+        'water': '#1e90ff',
+        'deep_ocean': '#00008b',
+        'grass': '#567d46',
+        'grass_cold': '#7a947a', // Новый цвет для тайги
+        'grass_jungle': '#1d4d12', // Новый цвет для джунглей
+        'dry_grass': '#91a06d',
+        'sand': '#edc9af',
+        'stone': '#808080',
+        'snow': '#ffffff',
+        'default': '#ff00ff'
+    };
+    // Используем tile.s вместо tile.surface
+    return colors[tile.s] || colors['default'];
 }
+
+
 
 
 // Render world
