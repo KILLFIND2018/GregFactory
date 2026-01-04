@@ -4,33 +4,29 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use App\Services\World\WorldGenerator;
+use Illuminate\Support\Facades\Cache;
 
 class WorldController extends Controller
 {
     public function chunk(Request $request)
     {
-        $cx = (int) $request->query('cx', 0);
-        $cy = (int) $request->query('cy', 0);
+        $request->validate([
+            'cx' => 'required|integer',
+            'cy' => 'required|integer',
+            'seed' => 'integer',
+        ]);
 
-        $generator = new WorldGenerator(
-            config('world.seed'),
-            config('world.chunk_size')
-        );
+        $cx = (int) $request->query('cx');
+        $cy = (int) $request->query('cy');
+        $seed = (int) ($request->query('seed') ?? 12345);
 
-        // 🔥 ВОТ ЗДЕСЬ КЕШ
-        $tiles = cache()->rememberForever(
-            "chunk_{$cx}_{$cy}",
-            function () use ($generator, $cx, $cy) {
-                return $generator->generateChunk($cx, $cy);
-            }
-        );
+        $generator = new WorldGenerator($seed);
 
+        // Временно убираем кэш, чтобы видеть изменения в реальном времени
+        $tiles = $generator->generateChunk($cx, $cy);
 
         return response()->json([
-            'cx' => $cx,
-            'cy' => $cy,
             'tiles' => $tiles
         ]);
     }
-
 }

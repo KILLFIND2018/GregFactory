@@ -23,6 +23,29 @@ class Noise
         return $t * $t * (3 - 2 * $t);
     }
 
+    public static function fbm(
+        float $x,
+        float $y,
+        float $scale,
+        int $seed,
+        int $octaves = 4,
+        float $persistence = 0.5,
+        float $lacunarity = 2.0
+    ): float {
+        $result = 0.0;
+        $amplitude = 1.0;
+        $frequency = 1.0 / $scale;
+
+        for ($i = 0; $i < $octaves; $i++) {
+            $result += self::valueNoise($x * $frequency, $y * $frequency, 1, $seed + $i) * $amplitude;
+            $amplitude *= $persistence;
+            $frequency *= $lacunarity;
+        }
+
+        $maxAmp = (1 - pow($persistence, $octaves)) / (1 - $persistence);
+        return $result / $maxAmp; // normalize to 0-1
+    }
+
     public static function valueNoise(
         float $x,
         float $y,
