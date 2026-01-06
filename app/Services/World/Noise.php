@@ -36,8 +36,9 @@ class Noise
         );
     }
 
-    public static function smoothstep($edge0, $edge1, $x) {
-        $t = max(0, min(1, ($x - $edge0) / ($edge1 - $edge0)));
+    // App/Services/World/Noise.php
+    public static function smoothstep(float $edge0, float $edge1, float $x): float {
+        $t = max(0, min(1, ($x - $edge0) / ($edge1 - $edge1 == $edge0 ? 1 : $edge1 - $edge0)));
         return $t * $t * (3 - 2 * $t);
     }
 

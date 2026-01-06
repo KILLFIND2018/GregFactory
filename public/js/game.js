@@ -267,16 +267,24 @@ function processChunkQueue() {
 // Colors
 function getTileColor(tile) {
     const colors = {
-        'deep_ocean':   '#001a33', // Почти черный синий
-        'water':        '#1e90ff', // Классическая вода
-        'sand':         '#e3c18b', // Пляжный песок
-        'beach_sand':   '#f49b0c',
-        'grass':        '#567d46',
-        'trees':        '#4be40b',
-        'grass_cold':   '#6a8a6a',
-        'dry_grass':    '#91a06d',
-        'stone':        '#7a7a7a',
-        'snow':         '#ffffff',
+        // Вода
+        'deep_ocean':   '#000b1a',
+        'water':        '#0077be',
+
+        // Берег
+        'beach_sand':   '#dcb35c', // Песок у воды
+
+        // Суша
+        'grass':        '#567d46', // Обычная трава
+        'grass_cold':   '#5b7c5b', // Тайга
+        'grass_forest': '#3e5e32', // Густой лес
+        'dry_grass':    '#b3a95d', // Саванна
+        'sand':         '#f2d16b', // Пустыня
+        'snow':         '#ffffff', // Пик гор
+        'freeze_grass': '#8ecff3', // Тундра
+        'stone':        '#696969', // Горы
+
+        // Ошибка
         'default':      '#ff00ff'
     };
     return colors[tile.s] || colors['default'];
