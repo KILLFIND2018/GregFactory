@@ -13,7 +13,7 @@ class WorldController extends Controller
     public function chunk(Request $request)
     {
         $coords = $request->query('batch');
-        $seed = (int) ($request->query('seed') ?? 12345);
+        $seed = (int) ($request->query('seed') ?? 987654);
 
         // Инициализируем генератор
         $generator = new WorldGenerator($seed);
