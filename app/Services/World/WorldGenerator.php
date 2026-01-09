@@ -11,21 +11,21 @@ class WorldGenerator
     // 1. НАСТРОЙКИ МАСШТАБОВ (ОБЯЗАТЕЛЬНО проверь наличие всех ключей!)
     private array $config = [
         'scales' => [
-            'continents'  => 600, // Размер материков                                       600
-            'mountains'   => 200, // Размер гор                                             200
-            'temperature' => 1000, // Масштаб тепла (больше число - плавнее переходы)       1000
-            'moisture'    => 900,  // Масштаб влажности                                     900
+            'continents'  => 400, // Размер материков                                       600
+            'mountains'   => 150, // Размер гор                                             200
+            'temperature' => 600, // Масштаб тепла (больше число - плавнее переходы)       1000
+            'moisture'    => 600,  // Масштаб влажности                                     900
             'rivers'      => 250, // Масштаб извилистости рек                               250
             'shore_patches' => 40,  // Размер пятен песка/глины/гравия на берегу            40
         ]
     ];
 
-    public function __construct(int $seed = 2585858, int $chunkSize = 16)
+    public function __construct(int $seed = 1767904171111, int $chunkSize = 16 , string $planet = 'earth')
     {
         $this->seed = $seed;
         $this->chunkSize = $chunkSize;
         Noise::init($seed);
-        $this->oreGenerator = new OreGenerator();
+        $this->oreGenerator = new OreGenerator($planet);
     }
 
     public function generateChunk(int $cx, int $cy): array
@@ -122,9 +122,23 @@ class WorldGenerator
             $tile = ['s' => $surface, 'b' => $biome, 'g' => 'stone'];
         }
 
-        // РУДА
-        $ore = $this->oreGenerator->getOreAt($wx, $wy, $h);
-        if ($ore) { $tile['o'] = $ore; }
+        // 1. ПРОВЕРЯЕМ РУДУ
+        // 1. Проверяем индикатор ТОЛЬКО если это не вода
+        $isWater = ($tile['s'] === 'water' || $tile['s'] === 'deep_ocean');
+
+        if (!$isWater) {
+            $indicator = $this->oreGenerator->getOreAt($wx, $wy, $h, true);
+            if ($indicator) {
+                $tile['s'] = $indicator;
+            }
+        }
+
+        // 2. А вот сама жила (объект 'o') пусть остается и под водой
+        // Игрок может найти её случайно или с помощью приборов позже
+        $ore = $this->oreGenerator->getOreAt($wx, $wy, $h, false);
+        if ($ore) {
+            $tile['o'] = $ore;
+        }
 
         return $tile;
     }
