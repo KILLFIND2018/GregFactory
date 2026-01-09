@@ -8,19 +8,18 @@ class WorldGenerator
     private int $chunkSize;
     private OreGenerator $oreGenerator;
 
-    // 1. НАСТРОЙКИ МАСШТАБОВ (ОБЯЗАТЕЛЬНО проверь наличие всех ключей!)
     private array $config = [
         'scales' => [
-            'continents'  => 400, // Размер материков                                       600
-            'mountains'   => 150, // Размер гор                                             200
-            'temperature' => 600, // Масштаб тепла (больше число - плавнее переходы)       1000
-            'moisture'    => 600,  // Масштаб влажности                                     900
-            'rivers'      => 250, // Масштаб извилистости рек                               250
-            'shore_patches' => 40,  // Размер пятен песка/глины/гравия на берегу            40
+            'continents'  => 800,
+            'mountains'   => 450,
+            'mtn_mask'    => 1200,
+            'temperature' => 900,
+            'moisture'    => 900,
+            'shore_variation' => 80, // Размер пятен (меньше число - четче пятна)
         ]
     ];
 
-    public function __construct(int $seed = 1767904171111, int $chunkSize = 16 , string $planet = 'earth')
+    public function __construct(int $seed = 1767904171111, int $chunkSize = 16, string $planet = 'earth')
     {
         $this->seed = $seed;
         $this->chunkSize = $chunkSize;
@@ -43,122 +42,95 @@ class WorldGenerator
 
     private function generateTile(int $wx, int $wy): array
     {
-        $h = $this->getNoiseValue($wx, $wy, 'continents', 'mountains');
+        $hBase = $this->getNoiseValue($wx, $wy, 'continents');
         $t = $this->getNoiseValue($wx, $wy, 'temperature');
         $m = $this->getNoiseValue($wx, $wy, 'moisture');
+        $rNoise = $this->getNoiseValue($wx, $wy, 'mountains');
+        $mMask = $this->getNoiseValue($wx, $wy, 'mtn_mask');
 
-        // Шум для рек
-        $rScale = $this->config['scales']['rivers'] ?? 300;
-        $rNoise = abs(Noise::noise($wx / $rScale, $wy / $rScale));
+        $elevation = $hBase - 0.45;
+
+        // ГОРЫ
+        $ridge = 1.0 - abs($rNoise - 0.5) * 2.0;
+        if ($elevation > 0.05 && $mMask > 0.50) {
+            $maskStrength = ($mMask - 0.50) * 2.5;
+            $elevation += pow($ridge, 1.2) * 0.5 * $maskStrength;
+        }
 
         $tile = [];
 
-        // 1. ОКЕАН
-        if ($h < 0.43) {
-            $isDeep = $h < 0.35;
+        // --- ЛОГИКА ТАЙЛОВ ---
+
+        // ОКЕАН
+        if ($elevation < 0) {
+            $isDeep = $elevation < -0.15;
             $tile = ['s' => $isDeep ? 'deep_ocean' : 'water', 'b' => 'ocean', 'g' => 'sand'];
         }
-        // 2. РЕКИ (Центральная часть - вода)
-        elseif ($rNoise < 0.025 && $h < 0.75) {
-            $tile = ['s' => 'water', 'b' => 'river', 'g' => 'gravel'];
-        }
-        // 3. БЕРЕГА РЕК (Новое!)
-        elseif ($rNoise < 0.055 && $h < 0.75) {
-            // Получаем шум для пятен (от 0 до 1)
-            $sPatch = $this->getNoiseValue($wx, $wy, 'shore_patches');
+        // БЕРЕГ (Песок с равными пятнами глины и гравия)
+        elseif ($elevation < 0.025) {
+            $sVar = $this->getNoiseValue($wx, $wy, 'shore_variation');
 
-            if ($sPatch < 0.33) {
-                $material = 'beach_sand';
-            } elseif ($m > 0.6 && $sPatch < 0.5) {
-                $material = 'clay'; //Глина только в лесу
+            // Распределение: 0.0--0.2 (Глина), 0.2--0.8 (Песок), 0.8--1.0 (Гравий)
+            if ($sVar < 0.25) {
+                $material = 'clay';        // Пятно глины
+                $ground = 'clay';
+            } elseif ($sVar > 0.75) {
+                $material = 'gravel';      // Пятно гравия
+                $ground = 'gravel';
             } else {
-                $material = 'gravel';
+                $material = 'beach_sand';  // Основной песок
+                $ground = 'sand';
             }
 
-            $tile = ['s' => $material, 'b' => 'river_bank', 'g' => $material];
+            $tile = ['s' => $material, 'b' => 'coast', 'g' => $ground];
         }
-        // 4. ОЗЕРА
-        elseif ($h < 0.60 && $m > 0.65) {
-            // Сама вода (центр озера)
-            if ($h < 0.59) {
-                $tile = ['s' => 'water', 'b' => 'lake', 'g' => 'sand'];
-            }
-            // Береговая зона озера (с использованием пятен шума)
-            else {
-                $sPatch = $this->getNoiseValue($wx, $wy, 'shore_patches');
-
-                if ($sPatch < 0.4) {
-                    $material = 'beach_sand';
-                } elseif ($sPatch < 0.7) {
-                    $material = 'gravel';
-                } else {
-                    $material = 'clay'; // Глина на берегах озер
-                }
-
-                $tile = ['s' => $material, 'b' => 'lake_shore', 'g' => $material];
-            }
+        // ГОРЫ
+        elseif ($elevation > 0.52) {
+            $isPeak = ($elevation > 0.72 && $ridge > 0.88);
+            $surface = $isPeak ? (($t < 0.4) ? 'snow_peak' : 'rock_peak') : (($t < 0.45) ? 'snow' : 'stone');
+            $tile = ['s' => $surface, 'b' => 'mountains', 'g' => 'stone'];
         }
-        // 5. ПЛЯЖ (Океанический)
-        elseif ($h < 0.46) {
-            $tile = ['s' => 'beach_sand', 'b' => 'beach', 'g' => 'sand'];
-        }
-        // 6. ГОРЫ
-        elseif ($h > 0.75) {
-            $isSnow = ($h > 0.85 && $t < 0.5);
-            $tile = ['s' => $isSnow ? 'snow' : 'stone', 'b' => 'mountains', 'g' => 'stone'];
-        }
-        // 7. БИОМЫ СУШИ
+        // СУША
         else {
-            $biome = 'plains'; $surface = 'grass';
-            if ($t < 0.42) {
-                if ($m < 0.45 && $h > 0.55) { $biome = 'tundra'; $surface = 'freeze_grass'; }
-                else { $biome = 'taiga'; $surface = 'grass_cold'; }
-            } elseif ($t > 0.65) {
-                if ($m < 0.40) { $biome = 'desert'; $surface = 'sand'; }
-                else { $biome = 'savanna'; $surface = 'dry_grass'; }
-            } else {
-                if ($m > 0.55) { $biome = 'forest'; $surface = 'grass_forest'; }
+            if ($elevation > 0.32) {
+                $biome = ($t < 0.45) ? 'tundra' : 'taiga';
+                $surface = ($t < 0.45) ? 'freeze_grass' : 'grass_cold';
             }
-            $tile = ['s' => $surface, 'b' => $biome, 'g' => 'stone'];
-        }
-
-        // 1. ПРОВЕРЯЕМ РУДУ
-        // 1. Проверяем индикатор ТОЛЬКО если это не вода
-        $isWater = ($tile['s'] === 'water' || $tile['s'] === 'deep_ocean');
-
-        if (!$isWater) {
-            $indicator = $this->oreGenerator->getOreAt($wx, $wy, $h, true);
-            if ($indicator) {
-                $tile['s'] = $indicator;
+            elseif ($t > 0.60 && $m < 0.38) {
+                $biome = 'desert'; $surface = 'desert_sand';
             }
+            elseif ($t > 0.58 && $m > 0.72) {
+                $biome = 'jungle'; $surface = 'jungle';
+            }
+            else {
+                $biome = ($m > 0.6) ? 'forest' : 'plains';
+                $surface = ($m > 0.6) ? 'grass_forest' : 'grass';
+            }
+            $tile = ['s' => $surface, 'b' => $biome, 'g' => 'dirt'];
         }
 
-        // 2. А вот сама жила (объект 'o') пусть остается и под водой
-        // Игрок может найти её случайно или с помощью приборов позже
-        $ore = $this->oreGenerator->getOreAt($wx, $wy, $h, false);
-        if ($ore) {
-            $tile['o'] = $ore;
+        // РУДА
+        if (!in_array($tile['s'], ['water', 'deep_ocean'])) {
+            $indicator = $this->oreGenerator->getOreAt($wx, $wy, $elevation, true);
+            if ($indicator) $tile['s'] = $indicator;
         }
+        $ore = $this->oreGenerator->getOreAt($wx, $wy, $elevation, false);
+        if ($ore) $tile['o'] = $ore;
 
         return $tile;
     }
 
     private function getNoiseValue(int $wx, int $wy, ...$layers): float
     {
-        $val = 0;
-        $weightTotal = 0;
-
+        $val = 0; $weightTotal = 0;
         foreach ($layers as $index => $layer) {
             if (!isset($this->config['scales'][$layer])) continue;
-
             $scale = $this->config['scales'][$layer];
             $weight = 1.0 / ($index + 1);
-
             $noise = (Noise::noise($wx / $scale, $wy / $scale) + 1) / 2;
             $val += $noise * $weight;
             $weightTotal += $weight;
         }
-
         return $weightTotal > 0 ? $val / $weightTotal : 0.5;
     }
 }

@@ -92,7 +92,7 @@ window.addEventListener("mousemove", (e) => {
 
 // Chunk management
 const CHUNK_SIZE = 16;
-const MAX_CONCURRENT_REQUESTS = 2;
+const MAX_CONCURRENT_REQUESTS = 10;
 let activeRequests = 0;
 const loadingChunks = new Set();
 const chunkCache = new Map();
@@ -120,10 +120,18 @@ function createChunkObject(tiles) {
 
 function enqueueChunk(cx, cy, priority) {
     const key = `${cx},${cy}`;
-    if (chunkCache.has(key) || loadingChunks.has(key) || chunkQueue.some(q => q.cx === cx && q.cy === cy)) return;
+    // Если уже грузится или есть в кэше — выходим
+    if (chunkCache.has(key) || loadingChunks.has(key)) return;
+
+    if (priority === -1) {
+        // Добавляем в НАЧАЛО очереди, чтобы запрос ушел немедленно
+        chunkQueue.unshift({ cx, cy, priority });
+    } else {
+        // Добавляем в конец (для фоновой загрузки окружения)
+        chunkQueue.push({ cx, cy, priority });
+    }
+
     loadingChunks.add(key);
-    chunkQueue.push({ cx, cy, priority });
-    chunkQueue.sort((a, b) => a.priority - b.priority);
 }
 
 async function fetchBatch(batch) {
@@ -149,8 +157,26 @@ async function fetchBatch(batch) {
 
 function processChunkQueue() {
     if (chunkQueue.length === 0 || activeRequests >= MAX_CONCURRENT_REQUESTS) return;
-    const batch = chunkQueue.splice(0, 8);
+    const batch = chunkQueue.splice(0, 16);
     fetchBatch(batch);
+}
+
+function preloadInitialChunks() {
+    const screenChunkSize = CHUNK_SIZE * tileSize;
+    const centerX = Math.floor((camera.x + canvas.width / 2) / screenChunkSize);
+    const centerY = Math.floor((camera.y + canvas.height / 2) / screenChunkSize);
+
+    const RADIUS = 4; // Сокращаем радиус до минимума для быстрого старта
+
+    for (let i = 0; i <= RADIUS; i++) {
+        for (let dx = -i; dx <= i; dx++) {
+            for (let dy = -i; dy <= i; dy++) {
+                if (Math.abs(dx) === i || Math.abs(dy) === i) {
+                    enqueueChunk(centerX + dx, centerY + dy, i);
+                }
+            }
+        }
+    }
 }
 
 function renderWorld() {
@@ -168,15 +194,16 @@ function renderWorld() {
             const screenY = cy * screenChunkSize - camera.y;
 
             // 1. Рисуем сам чанк
+            // В функции renderWorld найдите блок отрисовки чанка:
             if (chunkData) {
-                const age = performance.now() - chunkData.loadedAt;
-                ctx.globalAlpha = Math.min(age / 300, 1);
+                // Убираем прозрачность для мгновенного появления (тест)
                 ctx.drawImage(chunkData.canvas, screenX, screenY, screenChunkSize, screenChunkSize);
-                ctx.globalAlpha = 1;
             } else {
                 ctx.fillStyle = "#0a0a0a";
                 ctx.fillRect(screenX, screenY, screenChunkSize, screenChunkSize);
-                enqueueChunk(cx, cy, 0);
+
+                // ВАЖНО: Приоритет -1 выталкивает эти чанки в самый верх очереди
+                enqueueChunk(cx, cy, -1);
             }
 
             // 2. РИСУЕМ СЕТКУ (Debug Grid)
@@ -209,21 +236,42 @@ function renderWorld() {
 
 function renderTilesToCanvas(tiles, chunkCtx) {
     const colors = {
-        'deep_ocean': '#000b1a',
-        'water': '#0077be',
-        'beach_sand': '#f0e68c',
-        'grass': '#567d46',
-        'grass_cold': '#4d6d40',
-        'freeze_grass': '#6a8d7a',
-        'grass_forest': '#3d5e30',
-        'dry_grass': '#8b8d46',
-        'sand': '#d2b48c',
-        'stone': '#808080',
-        'snow': '#ffffff',
-        'clay': '#a1887f', // Коричневато-глиняный
-        'gravel': '#8d8d8d',
+        // ===== ВОДА =====
+        'deep_ocean': '#000b1a',     // очень тёмный синий
+        'water': '#0077be',          // океан
+        'lake': '#2a9df4',           // озёра (чуть светлее и чище)
+
+        // ===== БЕРЕГА =====
+        'beach_sand': '#f0e68c',     // пляж
+        'sand': '#d2b48c',           // обычный песок
+        'clay': '#a1887f',           // глина (коричневатая)
+        'gravel': '#8d8d8d',         // гравий (зернистый серый)
+        'beach': '#f0e68c',     // песчаный океанский берег
+        'coast': '#e6d8a3',     // если вдруг начнёшь рисовать b
 
 
+        // ===== РАСТИТЕЛЬНОСТЬ =====
+        'grass': '#567d46',          // равнины
+        'grass_forest': '#3d5e30',   // лес (темнее)
+        'grass_cold': '#4fe611',     // холодная трава (ярче)
+        'freeze_grass': '#6a8d7a',   // тундра
+        'dry_grass': '#8b8d46',      // сухие земли
+        'jungle': '#1f7a3a',         // тропики
+        'shrubland': '#7a7f3a',      // кустарники
+
+        // ===== ПУСТЫНЯ =====
+        'desert_sand': '#f4e209',    // пустыня (ярко)
+
+        // ===== ГОРЫ =====
+        'stone': '#808080',          // камень
+        'rock_peak': '#5c5c5c',      // скальные пики (темнее)
+        'snow': '#ffffff',           // снег
+        'snow_peak': '#e6f2ff',      // снежные пики (чуть голубой)
+
+        // ===== ХОЛМЫ / ПРЕДГОРЬЯ =====
+        'grass_rocky': '#6b7d5a',    // каменистая трава
+
+        // ===== РУДЫ =====
         'ore_andesite': '#8a8d8f',
         'ore_basalt': '#303030',
         'ore_brown_limonite': '#7b5c3d',
@@ -234,6 +282,7 @@ function renderTilesToCanvas(tiles, chunkCtx) {
         'ore_tin': '#acacac',
         'ore_bismuth': '#6e8b8b'
     };
+
 
     for (let y = 0; y < CHUNK_SIZE; y++) {
         for (let x = 0; x < CHUNK_SIZE; x++) {
@@ -296,18 +345,7 @@ function regenerateWorld() {
     preloadInitialChunks();
 }
 
-function preloadInitialChunks() {
-    const cx = Math.floor((camera.x + canvas.width/2) / (baseTileSize * CHUNK_SIZE * zoom));
-    const cy = Math.floor((camera.y + canvas.height/2) / (baseTileSize * CHUNK_SIZE * zoom));
-    const RADIUS = 6;
-    for (let i = 0; i <= RADIUS; i++) {
-        for (let dx = -i; dx <= i; dx++) {
-            for (let dy = -i; dy <= i; dy++) {
-                if (Math.abs(dx) === i || Math.abs(dy) === i) enqueueChunk(cx + dx, cy + dy, i);
-            }
-        }
-    }
-}
+
 
 function loop() {
     if (!isDragging) {
