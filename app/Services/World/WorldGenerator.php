@@ -32,8 +32,8 @@ class WorldGenerator
         $tiles = [];
         for ($y = 0; $y < $this->chunkSize; $y++) {
             for ($x = 0; $x < $this->chunkSize; $x++) {
-                $wx = $cx * $this->chunkSize + $x;
-                $wy = $cy * $this->chunkSize + $y;
+                $wx = ($cx * $this->chunkSize + $x) + 30000;
+                $wy = ($cy * $this->chunkSize + $y) + 30000;
                 $tiles[$y][$x] = $this->generateTile($wx, $wy);
             }
         }
@@ -95,18 +95,88 @@ class WorldGenerator
             if ($elevation > 0.32) {
                 $biome = ($t < 0.45) ? 'tundra' : 'taiga';
                 $surface = ($t < 0.45) ? 'freeze_grass' : 'grass_cold';
-            }
-            elseif ($t > 0.60 && $m < 0.38) {
-                $biome = 'desert'; $surface = 'desert_sand';
-            }
-            elseif ($t > 0.58 && $m > 0.72) {
-                $biome = 'jungle'; $surface = 'jungle';
-            }
-            else {
+            } elseif ($t > 0.60 && $m < 0.38) {
+                $biome = 'desert';
+                $surface = 'desert_sand';
+            } elseif ($t > 0.58 && $m > 0.72) {
+                $biome = 'jungle';
+                $surface = 'jungle';
+            } else {
                 $biome = ($m > 0.6) ? 'forest' : 'plains';
                 $surface = ($m > 0.6) ? 'grass_forest' : 'grass';
             }
             $tile = ['s' => $surface, 'b' => $biome, 'g' => 'dirt'];
+
+
+        }
+
+        // --- ГЕНЕРАЦИЯ ОБЪЕКТОВ (Деревья, кусты) ---
+        $vNoise = (Noise::noise($wx / 20, $wy / 20) + 1) / 2; // Пятна растительности
+        $dNoise = (Noise::noise($wx * 1.5, $wy * 1.5) + 1) / 2; // Детализация (травинки)
+
+        if ($elevation > 0.025) {
+            // 1. ГОРЫ (теперь цветы проверяются ПЕРВЫМИ)
+            if ($elevation >= 0.52 && $elevation < 0.72) {
+                if ($dNoise > 0.78) { // $dNoise - шанс для цветка, если уменьшить, то увеличишь количество
+                    $tile['e'] = 'stone_flower';
+                } elseif ($vNoise > 0.4 && $dNoise > 0.7) { // $dNoise - шанс для елки
+                    $tile['e'] = 'pine';
+                }
+            }
+            // 2. ЛОГИКА ДЛЯ РАВНИН
+            elseif (isset($biome) && $biome === 'plains') {
+                if ($vNoise > 0.65 && $dNoise > 0.6) {
+                    $tile['e'] = 'tree';
+                }
+                // ЧАСТОТА ЦВЕТОВ: снижаем порог до 0.7 для густоты
+                elseif ($dNoise > 0.79) {
+                    // Смешиваем цвета через остаток от деления координат
+                    $mix = abs($wx + $wy) % 3;
+                    if ($mix === 0) $tile['e'] = 'flower_red';
+                    elseif ($mix === 1) $tile['e'] = 'flower_yellow';
+                    else $tile['e'] = 'flower_white';
+                }
+                elseif ($dNoise > 0.6) {
+                    $tile['e'] = 'grass_detail';
+                }
+            }
+            // ПУСТЫНЯ: Кактусы чаще
+            elseif (isset($biome) && $biome === 'desert') {
+                if ($dNoise > 0.92) { // Примерно 8% площади
+                    $tile['e'] = 'cactus';
+                }
+            }
+
+            // ЛОГИКА ДЛЯ ЛЕСА
+            elseif (isset($biome) && $biome === 'forest') {
+                if ($vNoise > 0.35 && $dNoise > 0.3) $tile['e'] = 'tree';
+            }
+            // ТАЙГА
+            elseif (isset($biome) && $biome === 'taiga') {
+                if ($vNoise > 0.4 && $dNoise > 0.4) $tile['e'] = 'pine';
+                elseif ($dNoise > 0.8) $tile['e'] = 'bush_cold';
+            }
+            // ДЖУНГЛИ
+            elseif (isset($biome) && $biome === 'jungle') {
+                if ($vNoise > 0.2 && $dNoise > 0.2) $tile['e'] = 'jungle_tree';
+            }
+            elseif (isset($biome) && $biome === 'tundra') {
+                // Редкие сосны и много мелких холодных кустов
+                if ($vNoise > 0.5 && $dNoise > 0.8) {
+                    $tile['e'] = 'pine';
+                } elseif ($dNoise > 0.7) {
+                    $tile['e'] = 'bush_cold';
+                }
+            }
+        }
+
+        // БЕРЕГ: Кактусы редко (elevation < 0.025)
+        elseif ($elevation > 0) {
+            if ($dNoise > 0.85) { // Очень редко, примерно 15% площади
+                $tile['e'] = 'cactus';
+            } elseif ($dNoise > 0.8) {
+                $tile['e'] = 'sugar_cane';
+            }
         }
 
         // РУДА

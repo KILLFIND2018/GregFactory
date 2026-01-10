@@ -4,7 +4,7 @@ const ctx = canvas.getContext("2d");
 
 // Scale
 let zoom = 1;
-const minZoom = 0.5;
+const minZoom = 0.05;
 const maxZoom = 6;
 
 let baseTileSize = 32;
@@ -234,7 +234,7 @@ function renderWorld() {
     }
 }
 
-function renderTilesToCanvas(tiles, chunkCtx) {
+
     const colors = {
         // ===== ВОДА =====
         'deep_ocean': '#000b1a',     // очень тёмный синий
@@ -258,6 +258,21 @@ function renderTilesToCanvas(tiles, chunkCtx) {
         'dry_grass': '#8b8d46',      // сухие земли
         'jungle': '#1f7a3a',         // тропики
         'shrubland': '#7a7f3a',      // кустарники
+
+        //Цвета растительности в растительном слое
+        'tree': '#2d4c1e',        // Обычное дерево
+        'jungle_tree': '#145228', // Тропическое дерево
+        'pine': '#1a3317',        // Хвоя (темная)
+        'bush': '#719236',        // Куст
+        'bush_cold': '#5e7361',   // Замерзший куст для тундры
+        'grass_detail': '#47da05', // Цвет травинок (чуть темнее основной травы)
+        'stone_flower': '#add8e6', // Каменный цвет (светло-голубоватый/серый)
+        'flower_red': '#e74c3c',   // Красный цветок
+        'flower_yellow': '#f1c40f', // Желтый цветок
+        'flower_white': '#ecf0f1',  // Белый цветок
+        'cactus': '#2ecc71', // Ярко-зеленый цвет кактуса
+        'sugar_cane':'#942dd8',
+
 
         // ===== ПУСТЫНЯ =====
         'desert_sand': '#f4e209',    // пустыня (ярко)
@@ -284,23 +299,60 @@ function renderTilesToCanvas(tiles, chunkCtx) {
     };
 
 
+function renderTilesToCanvas(tiles, chunkCtx) {
     for (let y = 0; y < CHUNK_SIZE; y++) {
         for (let x = 0; x < CHUNK_SIZE; x++) {
             const tile = tiles[y][x];
-            // 1. Слой земли
-            chunkCtx.fillStyle = colors[tile.s] || '#000';
-            chunkCtx.fillRect(x * baseTileSize, y * baseTileSize, baseTileSize, baseTileSize);
+            const tx = x * baseTileSize;
+            const ty = y * baseTileSize;
 
-            // 2. Слой руды (если режим активен)
-            if (isProspecting && tile.o && colors[tile.o]) {
-                chunkCtx.fillStyle = colors[tile.o];
-                const p = 6;
-                chunkCtx.fillRect(
-                    x * baseTileSize + p,
-                    y * baseTileSize + p,
-                    baseTileSize - p * 2,
-                    baseTileSize - p * 2
-                );
+            // 1. ПОЧВА
+            chunkCtx.fillStyle = colors[tile.s] || '#000';
+            chunkCtx.fillRect(tx, ty, baseTileSize, baseTileSize);
+
+            // 2. ОБЪЕКТЫ
+            if (tile.e) {
+                if (tile.e === 'cactus') {
+                    chunkCtx.fillStyle = colors['cactus'];
+                    // Рисуем кактус узким высоким прямоугольником в центре
+                    const width = 6;
+                    const height = baseTileSize - 12;
+                    chunkCtx.fillRect(tx + (baseTileSize - width) / 2, ty + 6, width, height);
+
+                    // Добавим маленькую "колючку" сбоку для узнаваемости
+                    chunkCtx.fillRect(tx + (baseTileSize - width) / 2 + width, ty + 12, 4, 2);
+                } else if (tile.e === 'stone_flower') {
+                    chunkCtx.fillStyle = colors['stone_flower']; // Убеждаемся, что цвет берется из конфига
+                    chunkCtx.beginPath();
+
+                    // Центрируем кружок точно в середине тайла
+                    const centerX = tx + baseTileSize / 2;
+                    const centerY = ty + baseTileSize / 2;
+                    const radius = baseTileSize / 4; // Сделаем радиус зависимым от размера тайла (8 при 32)
+
+                    chunkCtx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+                    chunkCtx.fill();
+                } else if (tile.e.startsWith('flower_')) {
+                    // Обычные цветы оставляем квадратиками (или тоже можно скруглить)
+                    chunkCtx.fillStyle = colors[tile.e];
+                    chunkCtx.fillRect(tx + 12, ty + 12, 8, 8);
+                } else if (tile.e === 'grass_detail') {
+                    chunkCtx.fillStyle = colors['grass_detail'];
+                    chunkCtx.fillRect(tx + 10, ty + 14, 8, 3);
+                } else {
+                    // Деревья
+                    chunkCtx.fillStyle = 'rgba(0,0,0,0.2)';
+                    chunkCtx.fillRect(tx + 6, ty + 6, baseTileSize - 10, baseTileSize - 10);
+
+                    chunkCtx.fillStyle = colors[tile.e];
+                    chunkCtx.fillRect(tx + 4, ty + 4, baseTileSize - 10, baseTileSize - 10);
+                }
+            }
+
+            // 3. РУДА (Детектор)
+            if (isProspecting && tile.o) {
+                chunkCtx.fillStyle = colors[tile.o] || '#fff';
+                chunkCtx.fillRect(tx + 12, ty + 12, 8, 8);
             }
         }
     }
