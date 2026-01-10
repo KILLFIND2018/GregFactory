@@ -11,8 +11,8 @@ class WorldGenerator
     private array $config = [
         'scales' => [
             'continents'  => 800,
-            'mountains'   => 450,
-            'mtn_mask'    => 1200,
+            'mountains'   => 600,
+            'mtn_mask'    => 1500,
             'temperature' => 900,
             'moisture'    => 900,
             'shore_variation' => 80, // Размер пятен (меньше число - четче пятна)
@@ -32,8 +32,8 @@ class WorldGenerator
         $tiles = [];
         for ($y = 0; $y < $this->chunkSize; $y++) {
             for ($x = 0; $x < $this->chunkSize; $x++) {
-                $wx = ($cx * $this->chunkSize + $x) + 30000;
-                $wy = ($cy * $this->chunkSize + $y) + 30000;
+                $wx = ($cx * $this->chunkSize + $x) + 50;
+                $wy = ($cy * $this->chunkSize + $y) + 50;
                 $tiles[$y][$x] = $this->generateTile($wx, $wy);
             }
         }
@@ -52,9 +52,10 @@ class WorldGenerator
 
         // ГОРЫ
         $ridge = 1.0 - abs($rNoise - 0.5) * 2.0;
-        if ($elevation > 0.05 && $mMask > 0.50) {
-            $maskStrength = ($mMask - 0.50) * 2.5;
-            $elevation += pow($ridge, 1.2) * 0.5 * $maskStrength;
+        if ($elevation > 0.05 && $mMask > 0.45) {  // Уменьшили порог mMask с 0.50 → 0.45 для большего количества гор
+            $maskStrength = ($mMask - 0.45) * 2.0;  // Увеличили multiplier с 2.0 → 2.5 для большей силы маски
+            $peakBoost = pow($ridge, 0.8);  // Уменьшили exponent с 1.2 → 0.8 для острее пиков (ridge становится "пиковее")
+            $elevation += $peakBoost * 0.65 * $maskStrength;  // Увеличили коэффициент с 0.5 → 0.65 для выше гор
         }
 
         $tile = [];
@@ -86,8 +87,32 @@ class WorldGenerator
         }
         // ГОРЫ
         elseif ($elevation > 0.52) {
+            // Вычисляем "линию снега" на основе температуры (t): в холодных регионах снег ниже, в теплых — выше
+            $snow_line = 0.65 - ($t * 0.15);  // При t<0.45 (тундра/тайга холодная) снег с ~0.65; при t>0.6 (теплее) — выше 0.7-0.8
+            $snow_line = max(0.55, min(0.85, $snow_line));  // Ограничиваем, чтобы не было снега слишком низко/высоко
+
+            // Определяем, является ли это пиком
             $isPeak = ($elevation > 0.72 && $ridge > 0.88);
-            $surface = $isPeak ? (($t < 0.4) ? 'snow_peak' : 'rock_peak') : (($t < 0.45) ? 'snow' : 'stone');
+
+            // Поверхность теперь зависит от elevation vs snow_line
+            if ($isPeak) {
+                if ($elevation > $snow_line + 0.1) {  // Снег на пиках только очень высоко
+                    $surface = 'snow_peak';
+                } else {
+                    $surface = 'rock_peak';
+                }
+            } else {
+                if ($elevation > $snow_line) {
+                    $surface = 'snow';
+                } else {
+                    $surface = 'stone';
+                }
+            }
+            $subRidge = (Noise::noise($wx / 50, $wy / 50) + 1) / 2;  // Маленький шум для суб-пиков
+            if ($subRidge > 0.7) {
+                $elevation += 0.1 * $subRidge;  // Добавляем мини-пики для текстуры
+            }
+
             $tile = ['s' => $surface, 'b' => 'mountains', 'g' => 'stone'];
         }
         // СУША

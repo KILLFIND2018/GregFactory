@@ -306,8 +306,15 @@ function renderTilesToCanvas(tiles, chunkCtx) {
             const tx = x * baseTileSize;
             const ty = y * baseTileSize;
 
-            // 1. ПОЧВА
-            chunkCtx.fillStyle = colors[tile.s] || '#000';
+            // 1. ПОЧВА (с градиентом для гор)
+            if (tile.b === 'mountains') {
+                const grad = chunkCtx.createLinearGradient(tx, ty, tx + baseTileSize, ty + baseTileSize);
+                grad.addColorStop(0, colors[tile.s]);
+                grad.addColorStop(1, darkenColor(colors[tile.s], 0.8));  // Темнее для "тени" пиков
+                chunkCtx.fillStyle = grad;
+            } else {
+                chunkCtx.fillStyle = colors[tile.s] || '#000';
+            }
             chunkCtx.fillRect(tx, ty, baseTileSize, baseTileSize);
 
             // 2. ОБЪЕКТЫ
@@ -356,6 +363,14 @@ function renderTilesToCanvas(tiles, chunkCtx) {
             }
         }
     }
+}
+
+// Хелпер для затемнения цвета
+function darkenColor(color, factor) {
+    const r = parseInt(color.slice(1,3),16) * factor;
+    const g = parseInt(color.slice(3,5),16) * factor;
+    const b = parseInt(color.slice(5,7),16) * factor;
+    return `rgb(${Math.floor(r)},${Math.floor(g)},${Math.floor(b)})`;
 }
 
 function refreshVisibleChunks() {
