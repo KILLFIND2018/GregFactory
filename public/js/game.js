@@ -310,7 +310,6 @@ function renderTilesToCanvas(tiles, chunkCtx) {
     for (let y = 0; y < CHUNK_SIZE; y++) {
         for (let x = 0; x < CHUNK_SIZE; x++) {
             const tile = tiles[y][x];
-            tile.la = undefined;
             const tx = x * baseTileSize;
             const ty = y * baseTileSize;
 
