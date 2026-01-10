@@ -142,7 +142,7 @@ class WorldGenerator
             }
             // ПУСТЫНЯ: Кактусы чаще
             elseif (isset($biome) && $biome === 'desert') {
-                if ($dNoise > 0.92) { // Примерно 8% площади
+                if ($dNoise > 0.75) { // Примерно 25% площади
                     $tile['e'] = 'cactus';
                 }
             }
