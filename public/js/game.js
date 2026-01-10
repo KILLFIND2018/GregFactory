@@ -4,7 +4,7 @@ const ctx = canvas.getContext("2d");
 
 // Scale
 let zoom = 1;
-const minZoom = 0.05;
+const minZoom = 0.5;
 const maxZoom = 6;
 
 let baseTileSize = 32;
@@ -98,7 +98,8 @@ const loadingChunks = new Set();
 const chunkCache = new Map();
 const chunkQueue = [];
 let currentSeed = 1767904171111;
-let isProspecting = false;
+let isOreProspecting = false;
+let isLiquidProspecting = false;
 
 let showGrid = false;
 
@@ -295,7 +296,13 @@ function renderWorld() {
         'ore_copper': '#d37c5d',
         'ore_cassiterite': '#333333',
         'ore_tin': '#acacac',
-        'ore_bismuth': '#6e8b8b'
+        'ore_bismuth': '#6e8b8b',
+
+        // ===== ЖИДКОСТИ =====
+        'raw_oil': '#0f0f0f',       // Очень тёмный, почти чёрный (сырая нефть)
+        'heavy_oil': '#1a0f00',      // Тёмно-коричневый (тяжёлая)
+        'light_oil': '#331a00',      // Светло-коричневый (лёгкая)
+        'oil': '#260f00',            // Средний коричневый (обычная нефть)
     };
 
 
@@ -303,6 +310,7 @@ function renderTilesToCanvas(tiles, chunkCtx) {
     for (let y = 0; y < CHUNK_SIZE; y++) {
         for (let x = 0; x < CHUNK_SIZE; x++) {
             const tile = tiles[y][x];
+            tile.la = undefined;
             const tx = x * baseTileSize;
             const ty = y * baseTileSize;
 
@@ -357,9 +365,38 @@ function renderTilesToCanvas(tiles, chunkCtx) {
             }
 
             // 3. РУДА (Детектор)
-            if (isProspecting && tile.o) {
+            if (isOreProspecting && tile.o) {
                 chunkCtx.fillStyle = colors[tile.o] || '#fff';
                 chunkCtx.fillRect(tx + 12, ty + 12, 8, 8);
+            }
+
+            // 4. ЖИДКОСТИ (новое): закрашиваем весь тайл для видимости чанка
+            if (isLiquidProspecting && tile.lm !== undefined) {  // Только если есть жила (lm существует)
+                const fillRatio = tile.la / tile.lm;  // 0.0 — 1.0
+                const fillHeight = fillRatio * baseTileSize;
+
+                // Заполнение снизу вверх (как жидкость в резервуаре)
+                chunkCtx.fillStyle = colors[tile.l] || '#000';
+                chunkCtx.globalAlpha = 0.85;  // Немного прозрачно, чтобы видеть рельеф под ней
+                chunkCtx.fillRect(tx, ty + baseTileSize - fillHeight, baseTileSize, fillHeight);
+                chunkCtx.globalAlpha = 1.0;
+
+                // Текст количества (всегда, даже 0L)
+                const fontSize = Math.min(16, Math.max(10, 14 * zoom));
+                chunkCtx.font = `${Math.floor(fontSize)}px Arial`;
+                chunkCtx.textAlign = 'center';
+                chunkCtx.textBaseline = 'middle';
+
+                // Цвет текста: белый на тёмном заполнении, серый на светлом/пустом
+                chunkCtx.fillStyle = fillRatio > 0.5 ? '#ffffff' : '#aaaaaa';
+                chunkCtx.fillText(`${tile.la}L`, tx + baseTileSize / 2, ty + baseTileSize / 2);
+
+                // Опционально: лёгкая рамка вокруг тайла с жидкостью для выделения
+                if (fillRatio > 0) {
+                    chunkCtx.strokeStyle = '#ffff00';
+                    chunkCtx.lineWidth = 1;
+                    chunkCtx.strokeRect(tx + 0.5, ty + 0.5, baseTileSize - 1, baseTileSize - 1);
+                }
             }
         }
     }
@@ -385,8 +422,12 @@ function refreshVisibleChunks() {
 
 // Controls
 window.addEventListener('keydown', (e) => {
-    if (e.key.toLowerCase() === 'p' && !isProspecting) {
-        isProspecting = true;
+    if (e.key.toLowerCase() === 'p' && !isOreProspecting) {
+        isOreProspecting = true;
+        refreshVisibleChunks();
+    }
+    if (e.key === 'l' && !isLiquidProspecting) {
+        isLiquidProspecting = true;
         refreshVisibleChunks();
     }
     if (e.key.toLowerCase() === "1") {
@@ -399,7 +440,11 @@ window.addEventListener('keydown', (e) => {
 
 window.addEventListener('keyup', (e) => {
     if (e.key.toLowerCase() === 'p') {
-        isProspecting = false;
+        isOreProspecting = false;
+        refreshVisibleChunks();
+    }
+    if (e.key.toLowerCase() === 'l') {
+        isLiquidProspecting = false;
         refreshVisibleChunks();
     }
 });

@@ -7,6 +7,7 @@ class WorldGenerator
     private int $seed;
     private int $chunkSize;
     private OreGenerator $oreGenerator;
+    private LiquidGenerator $liquidGenerator;
 
     private array $config = [
         'scales' => [
@@ -25,16 +26,38 @@ class WorldGenerator
         $this->chunkSize = $chunkSize;
         Noise::init($seed);
         $this->oreGenerator = new OreGenerator($planet);
+        $this->liquidGenerator = new LiquidGenerator($planet);
     }
 
     public function generateChunk(int $cx, int $cy): array
     {
         $tiles = [];
+
+        // Получаем данные жилы (type + max_amount как VeinData)
+        $liquidVein = $this->liquidGenerator->getLiquidVeinForChunk($cx, $cy);
+
         for ($y = 0; $y < $this->chunkSize; $y++) {
             for ($x = 0; $x < $this->chunkSize; $x++) {
                 $wx = ($cx * $this->chunkSize + $x) + 50;
                 $wy = ($cy * $this->chunkSize + $y) + 50;
                 $tiles[$y][$x] = $this->generateTile($wx, $wy);
+
+                // Жидкость с вариацией per-tile
+                if ($liquidVein) {
+                    // Плавная вариация через шум (пятна внутри чанка)
+                    $densityNoise = (Noise::noise(($wx + 1000) / 30.0, ($wy + 1000) / 30.0) + 1) / 2; // Масштаб ~30 для пятен внутри чанка
+                    // Делаем распределение неравномерным (больше пустых и полных зон)
+                    $density = pow($densityNoise, 1.3); // exponent >1 → больше низких значений
+
+                    $tileAmount = (int)floor($density * $liquidVein['max_amount']);
+
+                    $tiles[$y][$x]['l'] = $liquidVein['type'];
+                    $tiles[$y][$x]['la'] = $tileAmount;         // Текущее количество в тайле
+                    $tiles[$y][$x]['lm'] = $liquidVein['max_amount']; // Максимум жилы (для пропорционального заполнения)
+                    // 'ld' для будущей добычи (decrease)
+                    $tiles[$y][$x]['ld'] = $liquidVein['decrease_per_operation'];
+                }
+                // Если $liquidVein null → ничего не добавляем (la=0 подразумевается отсутствием ключей)
             }
         }
         return $tiles;
@@ -203,6 +226,7 @@ class WorldGenerator
                 $tile['e'] = 'sugar_cane';
             }
         }
+
 
         // РУДА
         if (!in_array($tile['s'], ['water', 'deep_ocean'])) {
