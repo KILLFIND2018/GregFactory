@@ -110,7 +110,7 @@ window.addEventListener("mousemove", (e) => {
 //Player
 
 const player = {
-    x: 0,        // позиция в тайлах
+    x: 0,
     y: 0,
     vx: 0,
     vy: 0,
@@ -119,11 +119,17 @@ const player = {
     height: 1.8,
 
     speed: 0.12,
-    gravity: 0.035,
-    jumpForce: 0.75,
+    gravity: 0.02,  // уменьшили для плавности
+    jumpForce: 0.3, // сила прыжка/подъема
 
-    onGround: false,
+    onGround: true,
     hp: 100,
+
+    // НОВОЕ: анимация прыжков/спусков
+    jumpAnim: 0,
+    jumpHeight: 0,
+    jumpType: 'none',
+    jumpCooldown: 0,
 };
 
 
@@ -219,6 +225,26 @@ function updatePlayer() {
         dy /= len;
     }
 
+    // === ОБНОВЛЕНИЕ АНИМАЦИИ ПРЫЖКА (ГЛАВНОЕ ИСПРАВЛЕНИЕ) ===
+    if (player.jumpAnim > 0) {
+        player.jumpAnim -= 0.12; // затухание анимации
+        if (player.jumpAnim <= 0) {
+            player.jumpAnim = 0;
+            player.onGround = true;
+            player.vy = 0;
+            player.jumpType = 'none';
+        }
+    }
+
+    // Гравитация ТОЛЬКО во время прыжка
+    if (!player.onGround && player.jumpAnim > 0) {
+        player.vy += player.gravity;
+        player.y += player.vy * 0.8; // плавное движение
+    }
+
+    // Кулдаун
+    if (player.jumpCooldown > 0) player.jumpCooldown--;
+
     const currentTile = getTileAt(Math.floor(player.x), Math.floor(player.y));
     const surface = getSurfaceEffect(currentTile);
     const speed = player.speed * surface.speed;
@@ -226,58 +252,101 @@ function updatePlayer() {
     const moveX = dx * speed;
     const moveY = dy * speed;
 
-    // Для X движения
-    const oldX = player.x;
-    const targetX = player.x + moveX;
-    const targetTileX = getTileAt(Math.floor(targetX), Math.floor(player.y));
-    const currentHeight = getBiomeHeight(currentTile.b);
-    const targetHeight = getBiomeHeight(targetTileX.b);
 
-    let allowMoveX = true;
-    if (targetHeight > currentHeight) {
-        if (targetHeight - currentHeight <= 1 && isAutostepTransition(currentTile.b, targetTileX.b)) {
-            // Autostep: автоматический подъем (корректируем y для имитации, в будущем интегрировать с vy/gravity)
-            player.y -= (targetHeight - currentHeight); // подъем вверх (y уменьшается)
-        } else if (targetHeight - currentHeight > 1) {
-            allowMoveX = false; // блокируем если разница слишком большая
+
+    // 🔥 ОСОБЫЙ ПРЫЖОК: выход из воды на пляж
+    if (player.onGround && player.jumpCooldown === 0) {
+        const currentHeight = getBiomeHeight(currentTile.b);
+
+        // ПРЯМО СЕЙЧАС проверяем НАПРАВЛЕНИЕ движения
+        const lookAheadDist = 1.2;
+        const lookAheadX = Math.floor(player.x + dx * lookAheadDist);
+        const lookAheadY = Math.floor(player.y + dy * lookAheadDist);
+        const aheadTile = getTileAt(lookAheadX, lookAheadY);
+        const aheadHeight = getBiomeHeight(aheadTile.b);
+        const heightDiff = aheadHeight - currentHeight;
+
+        console.log(`🔍 Смотрим вперед: ${currentTile.b}(${currentHeight}) → ${aheadTile.b}(${aheadHeight})`);
+
+        // === ОТЛИЧИЕ ВЫСОТ = ПРЫЖОК/СПУСК ===
+        if (Math.abs(heightDiff) === 1) {
+            if (heightDiff > 0) {
+                // ПОДЪЕМ (включая океан→пляж!)
+                console.log("⬆️  ПОДЪЕМ обнаружен!");
+                triggerJump('up', heightDiff);
+                return;
+            } else {
+                // СПУСК (пляж→океан)
+                console.log("⬇️  СПУСК обнаружен!");
+                triggerJump('down', Math.abs(heightDiff));
+                return;
+            }
         }
     }
-    if (allowMoveX) {
+
+    // === X ДВИЖЕНИЕ ===
+    const oldX = player.x;
+    const targetX = player.x + moveX;
+
+    // БЛОКИРОВКА движения во время прыжка
+    if (player.onGround) {
         player.x = targetX;
         if (checkObjectCollision()) {
             player.x = oldX;
         }
     }
 
-    // Для Y движения (аналогично, но для вертикали, если нужно)
+    // === Y ДВИЖЕНИЕ ===
     const oldY = player.y;
     const targetY = player.y + moveY;
-    const targetTileY = getTileAt(Math.floor(player.x), Math.floor(targetY));
-    const targetHeightY = getBiomeHeight(targetTileY.b);
 
-    let allowMoveY = true;
-    if (targetHeightY > currentHeight) {
-        if (targetHeightY - currentHeight <= 1 && isAutostepTransition(currentTile.b, targetTileY.b)) {
-            player.y -= (targetHeightY - currentHeight); // autostep
-        } else if (targetHeightY - currentHeight > 1) {
-            allowMoveY = false;
-        }
-    }
-    if (allowMoveY) {
+    if (player.onGround) {
         player.y = targetY;
         if (checkObjectCollision()) {
             player.y = oldY;
         }
     }
+
+    // 🔥 ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА ПРЫЖКА ПО ВСЕМ БИОМАМ
+    if (player.onGround && player.jumpCooldown === 0) {
+        const currentHeight = getBiomeHeight(currentTile.b);
+        const nextTileX = getTileAt(Math.floor(player.x + dx * 1.5), Math.floor(player.y));
+        const nextHeightX = getBiomeHeight(nextTileX.b);
+        const heightDiffX = nextHeightX - currentHeight;
+
+        if (Math.abs(heightDiffX) === 1) {
+            if (heightDiffX > 0 && isAutostepTransition(currentTile.b, nextTileX.b)) {
+                console.log("🏔️ MOUNTAIN JUMP:", currentTile.b, "→", nextTileX.b);
+                triggerJump('up', heightDiffX);
+
+            } else if (heightDiffX < 0) {
+                console.log("⬇️ DESCENT:", currentTile.b, "→", nextTileX.b);
+                triggerJump('down', Math.abs(heightDiffX));
+
+            }
+        }
+    }
+}
+
+
+
+//запускает прыжок/спуск
+function triggerJump(type, heightLevels) {
+    console.log(`🎮 TRIGGER JUMP: ${type} (${heightLevels})`);
+    player.onGround = false;
+    player.jumpType = type;
+    player.jumpAnim = 1.0;
+    player.jumpHeight = heightLevels * 0.8;
+    player.vy = type === 'up' ? -player.jumpForce * heightLevels : player.jumpForce * heightLevels / 2;
+    player.jumpCooldown = 15;
 }
 
 // Функция для проверки, является ли переход autostep (вода -> пляж, лес/тундра/саванна -> горы)
 function isAutostepTransition(currentBiome, targetBiome) {
-    if (currentBiome === 'ocean' && targetBiome === 'beach') {
-        return true;
-    }
-    return ['forest', 'tundra', 'savanna'].includes(currentBiome) && ['mountain', 'peak'].includes(targetBiome);
-
+    // Прыжки разрешены: океан->пляж И лес/тундра/саванна->горы/пики
+    if (currentBiome === 'ocean' && targetBiome === 'beach') return true;
+    return ['forest', 'tundra', 'savanna'].includes(currentBiome) &&
+        ['mountain', 'peak'].includes(targetBiome);
 }
 
 
@@ -433,15 +502,47 @@ function renderWorld() {
 
 function renderPlayer() {
     const px = player.x * tileSize - camera.x;
-    const py = player.y * tileSize - camera.y;
+    let py = player.y * tileSize - camera.y;
 
-    ctx.fillStyle = "#ff3b3b";
+    // Смещение при прыжке
+    if (player.jumpAnim > 0) {
+        const offset = Math.sin(player.jumpAnim * Math.PI) * player.jumpHeight * tileSize;
+        py -= offset;
+    }
+
+    // Тень
+    ctx.fillStyle = "rgba(0,0,0,0.35)";
     ctx.fillRect(
-        px - (player.width * tileSize) / 2,
+        px - (player.width * tileSize)/2 + 4,
+        py - player.height * tileSize + player.height * tileSize * 0.7,
+        player.width * tileSize * 0.9,
+        player.height * tileSize * 0.3
+    );
+
+    // Основной цвет тела
+    let bodyColor = "#ff3b3b"; // обычный
+    if (player.jumpType === 'up')   bodyColor = "#ff6b6b";
+    if (player.jumpType === 'down') bodyColor = "#6ba0ff";
+
+    ctx.fillStyle = bodyColor;
+    ctx.fillRect(
+        px - (player.width * tileSize)/2,
         py - player.height * tileSize,
         player.width * tileSize,
         player.height * tileSize
     );
+
+    // Глаза
+    const eyeSize = player.jumpAnim > 0.4 ? 5 : 4;
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(px - 8, py - player.height * tileSize + 10, eyeSize, eyeSize);
+    ctx.fillRect(px + 4, py - player.height * tileSize + 10, eyeSize, eyeSize);
+
+    // Ротик при прыжке вверх
+    if (player.jumpType === 'up' && player.jumpAnim > 0.3) {
+        ctx.fillStyle = "#ffff66";
+        ctx.fillRect(px - 5, py - player.height * tileSize + 22, 10, 3);
+    }
 }
 
 
@@ -648,7 +749,9 @@ window.addEventListener('keydown', (e) => {
     if (e.key.toLowerCase() === 'c') {
         followPlayer = !followPlayer;
     }
-
+    if (e.key.toLowerCase() === 'f') {
+        console.log(`Jump: ${player.jumpType}, Anim: ${player.jumpAnim.toFixed(2)}, OnGround: ${player.onGround}`);
+    }
 });
 
 window.addEventListener('keyup', (e) => {
