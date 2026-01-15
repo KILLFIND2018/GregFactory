@@ -2,6 +2,24 @@
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 
+const keys = Object.create(null);
+
+window.addEventListener("keydown", (e) => {
+    keys[e.key.toLowerCase()] = true;
+});
+
+window.addEventListener("keyup", (e) => {
+    keys[e.key.toLowerCase()] = false;
+});
+
+
+document.addEventListener("DOMContentLoaded", async () => {
+    const serverPlayer = await spawnPlayer("DevPlayer");
+    player.x = serverPlayer.x;
+    player.y = serverPlayer.y;
+});
+
+
 // Scale
 let zoom = 1;
 const minZoom = 0.5;
@@ -89,6 +107,64 @@ window.addEventListener("mousemove", (e) => {
     lastMouseX = e.clientX;
     lastMouseY = e.clientY;
 });
+
+//Player
+
+const player = {
+    x: 0,        // позиция в тайлах
+    y: 0,
+    vx: 0,
+    vy: 0,
+
+    width: 0.8,
+    height: 1.8,
+
+    speed: 0.12,
+    gravity: 0.035,
+    jumpForce: 0.75,
+
+    onGround: false,
+    hp: 100,
+};
+
+
+
+// Физика игрока
+
+function updatePlayer() {
+    let dx = 0;
+    let dy = 0;
+
+    if (keys['a'] || keys['arrowleft'])  dx -= 1;
+    if (keys['d'] || keys['arrowright']) dx += 1;
+    if (keys['w'] || keys['arrowup'])    dy -= 1;
+    if (keys['s'] || keys['arrowdown'])  dy += 1;
+
+    // нормализация диагонали
+    if (dx !== 0 || dy !== 0) {
+        const len = Math.hypot(dx, dy);
+        dx /= len;
+        dy /= len;
+    }
+    if (keys[' ']) {
+        // зарезервировано
+    }
+
+    player.vx = dx * player.speed;
+    player.vy = dy * player.speed;
+
+    player.x += player.vx;
+    player.y += player.vy;
+}
+
+
+
+setInterval(() => {
+    syncPlayer(player);
+}, 1000);
+
+
+
 
 // Chunk management
 const CHUNK_SIZE = 16;
@@ -234,6 +310,22 @@ function renderWorld() {
         }
     }
 }
+
+//Рендер игрока
+
+function renderPlayer() {
+    const px = player.x * tileSize - camera.x;
+    const py = player.y * tileSize - camera.y;
+
+    ctx.fillStyle = "#ff3b3b";
+    ctx.fillRect(
+        px - (player.width * tileSize) / 2,
+        py - player.height * tileSize,
+        player.width * tileSize,
+        player.height * tileSize
+    );
+}
+
 
 
     const colors = {
@@ -435,6 +527,10 @@ window.addEventListener('keydown', (e) => {
     if (e.key.toLowerCase() === 'g') { // Клавиша G для сетки
         showGrid = !showGrid;
     }
+    if (e.key.toLowerCase() === 'c') {
+        followPlayer = !followPlayer;
+    }
+
 });
 
 window.addEventListener('keyup', (e) => {
@@ -457,6 +553,10 @@ function regenerateWorld() {
 }
 
 
+//флаг следования игрока
+let followPlayer = true;
+
+
 
 function loop() {
     if (!isDragging) {
@@ -468,7 +568,17 @@ function loop() {
     processChunkQueue();
     ctx.fillStyle = "#000";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    renderWorld();
+    //камера следует за игроком
+    updatePlayer();
+
+    if (followPlayer) {
+        camera.x = player.x * tileSize - canvas.width / 2;
+        camera.y = player.y * tileSize - canvas.height / 2;
+    }
+
+
+    renderWorld();  //рендер мира
+    renderPlayer(); //рендер игрока
     requestAnimationFrame(loop);
 }
 

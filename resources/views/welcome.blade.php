@@ -26,6 +26,7 @@
     @vite('resources/js/app.js')
     -->
     <canvas id="game"></canvas>
+    <script src="/js/playerService.js"></script>
     <script src="/js/game.js"></script>
 
 
