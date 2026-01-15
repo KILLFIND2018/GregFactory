@@ -35,7 +35,6 @@ let lastMouseY = 0;
 
 
 const inertiaDamping = 0.94;
-const velocityMax = 60;
 
 // Camera
 const camera = {
@@ -59,7 +58,7 @@ function onResize() {
 }
 window.addEventListener("resize", onResize);
 
-function clampCamera() {}
+
 
 // Zoom
 function setZoom(newZoom, centerX = camera.screenCenterX, centerY = camera.screenCenterY) {
@@ -129,39 +128,158 @@ const player = {
 
 
 
-// Физика игрока
 
+setInterval(() => {
+    syncPlayer(player);
+}, 1000);
+
+//коллизия и взаимодествие игрока с миром
+function getSurfaceEffect(tile) {
+    switch (tile.b) {
+        case 'ocean':    return { speed: 0.4 }; // замедление в океане
+        case 'beach':    return { speed: 0.9 };
+        case 'forest':   return { speed: 0.8 };
+        case 'tundra':   return { speed: 0.7 };
+        case 'savanna':  return { speed: 0.85 };
+        case 'desert':   return { speed: 0.75 }; // замедление в пустыне
+        case 'mountain': return { speed: 0.6 }; // замедление в горах
+        case 'peak':     return { speed: 0.5 }; // замедление в пиках
+        default:         return { speed: 1 };
+    }
+}
+
+// Добавляем функцию для получения тайла по координатам
+function getTileAt(tx, ty) {
+    const cx = Math.floor(tx / CHUNK_SIZE);
+    const cy = Math.floor(ty / CHUNK_SIZE);
+    const key = `${cx},${cy}`;
+    const chunk = chunkCache.get(key);
+    if (!chunk || !chunk.tiles) {
+        return { b: 'default', e: null };
+    }
+    const lx = ((tx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    const ly = ((ty % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    return chunk.tiles[ly][lx];
+}
+
+// Добавляем функцию проверки коллизии с объектами (включая деревья как препятствия)
+function checkObjectCollision() {
+    const left = Math.floor(player.x - player.width / 2);
+    const right = Math.floor(player.x + player.width / 2);
+    const top = Math.floor(player.y - player.height);
+    const bottom = Math.floor(player.y);
+
+    for (let tx = left; tx <= right; tx++) {
+        for (let ty = top; ty <= bottom; ty++) {
+            const tile = getTileAt(tx, ty);
+            if (tile.e && isSolidEntity(tile.e)) {
+                return true; // коллизия
+            }
+        }
+    }
+    return false; // нет коллизии
+}
+
+// Функция для определения, является ли сущность твердой (деревья - препятствия)
+function isSolidEntity(e) {
+    return ['tree', 'jungle_tree', 'pine', 'cactus'].includes(e); // деревья - препятствия, кусты можно добавить если нужно
+}
+
+// Для autostep: добавляем базовую логику для автоматического подъема на переходах (вода -> пляж, лес/тундра/саванна -> горы)
+// Модифицируем движение для проверки перехода и автоподъема (предполагаем, что гравитация и vy будут использоваться для подъема, но пока добавляем как корректировку y)
+function getBiomeHeight(biome) {
+    switch (biome) {
+        case 'ocean': return 0;
+        case 'beach': return 1;
+        case 'forest': return 1;
+        case 'tundra': return 1;
+        case 'savanna': return 1;
+        case 'desert': return 1;
+        case 'mountain': return 2;
+        case 'peak': return 3;
+        default: return 1;
+    }
+}
+
+// Модифицируем updatePlayer для поддержки autostep
 function updatePlayer() {
     let dx = 0;
     let dy = 0;
 
+    // --- управление ---
     if (keys['a'] || keys['arrowleft'])  dx -= 1;
     if (keys['d'] || keys['arrowright']) dx += 1;
     if (keys['w'] || keys['arrowup'])    dy -= 1;
     if (keys['s'] || keys['arrowdown'])  dy += 1;
 
-    // нормализация диагонали
+    // --- нормализация диагонали ---
     if (dx !== 0 || dy !== 0) {
         const len = Math.hypot(dx, dy);
         dx /= len;
         dy /= len;
     }
-    if (keys[' ']) {
-        // зарезервировано
+
+    const currentTile = getTileAt(Math.floor(player.x), Math.floor(player.y));
+    const surface = getSurfaceEffect(currentTile);
+    const speed = player.speed * surface.speed;
+
+    const moveX = dx * speed;
+    const moveY = dy * speed;
+
+    // Для X движения
+    const oldX = player.x;
+    const targetX = player.x + moveX;
+    const targetTileX = getTileAt(Math.floor(targetX), Math.floor(player.y));
+    const currentHeight = getBiomeHeight(currentTile.b);
+    const targetHeight = getBiomeHeight(targetTileX.b);
+
+    let allowMoveX = true;
+    if (targetHeight > currentHeight) {
+        if (targetHeight - currentHeight <= 1 && isAutostepTransition(currentTile.b, targetTileX.b)) {
+            // Autostep: автоматический подъем (корректируем y для имитации, в будущем интегрировать с vy/gravity)
+            player.y -= (targetHeight - currentHeight); // подъем вверх (y уменьшается)
+        } else if (targetHeight - currentHeight > 1) {
+            allowMoveX = false; // блокируем если разница слишком большая
+        }
+    }
+    if (allowMoveX) {
+        player.x = targetX;
+        if (checkObjectCollision()) {
+            player.x = oldX;
+        }
     }
 
-    player.vx = dx * player.speed;
-    player.vy = dy * player.speed;
+    // Для Y движения (аналогично, но для вертикали, если нужно)
+    const oldY = player.y;
+    const targetY = player.y + moveY;
+    const targetTileY = getTileAt(Math.floor(player.x), Math.floor(targetY));
+    const targetHeightY = getBiomeHeight(targetTileY.b);
 
-    player.x += player.vx;
-    player.y += player.vy;
+    let allowMoveY = true;
+    if (targetHeightY > currentHeight) {
+        if (targetHeightY - currentHeight <= 1 && isAutostepTransition(currentTile.b, targetTileY.b)) {
+            player.y -= (targetHeightY - currentHeight); // autostep
+        } else if (targetHeightY - currentHeight > 1) {
+            allowMoveY = false;
+        }
+    }
+    if (allowMoveY) {
+        player.y = targetY;
+        if (checkObjectCollision()) {
+            player.y = oldY;
+        }
+    }
 }
 
+// Функция для проверки, является ли переход autostep (вода -> пляж, лес/тундра/саванна -> горы)
+function isAutostepTransition(currentBiome, targetBiome) {
+    if (currentBiome === 'ocean' && targetBiome === 'beach') {
+        return true;
+    }
+    return ['forest', 'tundra', 'savanna'].includes(currentBiome) && ['mountain', 'peak'].includes(targetBiome);
 
+}
 
-setInterval(() => {
-    syncPlayer(player);
-}, 1000);
 
 
 
@@ -328,74 +446,74 @@ function renderPlayer() {
 
 
 
-    const colors = {
-        // ===== ВОДА =====
-        'deep_ocean': '#000b1a',     // очень тёмный синий
-        'water': '#0077be',          // океан
-        'lake': '#2a9df4',           // озёра (чуть светлее и чище)
+const colors = {
+    // ===== ВОДА =====
+    'deep_ocean': '#000b1a',     // очень тёмный синий
+    'water': '#0077be',          // океан
+    'lake': '#2a9df4',           // озёра (чуть светлее и чище)
 
-        // ===== БЕРЕГА =====
-        'beach_sand': '#f0e68c',     // пляж
-        'sand': '#d2b48c',           // обычный песок
-        'clay': '#a1887f',           // глина (коричневатая)
-        'gravel': '#8d8d8d',         // гравий (зернистый серый)
-        'beach': '#f0e68c',     // песчаный океанский берег
-        'coast': '#e6d8a3',     // если вдруг начнёшь рисовать b
-
-
-        // ===== РАСТИТЕЛЬНОСТЬ =====
-        'grass': '#567d46',          // равнины
-        'grass_forest': '#3d5e30',   // лес (темнее)
-        'grass_cold': '#4fe611',     // холодная трава (ярче)
-        'freeze_grass': '#6a8d7a',   // тундра
-        'dry_grass': '#8b8d46',      // сухие земли
-        'jungle': '#1f7a3a',         // тропики
-        'shrubland': '#7a7f3a',      // кустарники
-
-        //Цвета растительности в растительном слое
-        'tree': '#2d4c1e',        // Обычное дерево
-        'jungle_tree': '#145228', // Тропическое дерево
-        'pine': '#1a3317',        // Хвоя (темная)
-        'bush': '#719236',        // Куст
-        'bush_cold': '#5e7361',   // Замерзший куст для тундры
-        'grass_detail': '#47da05', // Цвет травинок (чуть темнее основной травы)
-        'stone_flower': '#add8e6', // Каменный цвет (светло-голубоватый/серый)
-        'flower_red': '#e74c3c',   // Красный цветок
-        'flower_yellow': '#f1c40f', // Желтый цветок
-        'flower_white': '#ecf0f1',  // Белый цветок
-        'cactus': '#2ecc71', // Ярко-зеленый цвет кактуса
-        'sugar_cane':'#942dd8',
+    // ===== БЕРЕГА =====
+    'beach_sand': '#f0e68c',     // пляж
+    'sand': '#d2b48c',           // обычный песок
+    'clay': '#a1887f',           // глина (коричневатая)
+    'gravel': '#8d8d8d',         // гравий (зернистый серый)
+    'beach': '#f0e68c',     // песчаный океанский берег
+    'coast': '#e6d8a3',     // если вдруг начнёшь рисовать b
 
 
-        // ===== ПУСТЫНЯ =====
-        'desert_sand': '#f4e209',    // пустыня (ярко)
+    // ===== РАСТИТЕЛЬНОСТЬ =====
+    'grass': '#567d46',          // равнины
+    'grass_forest': '#3d5e30',   // лес (темнее)
+    'grass_cold': '#4fe611',     // холодная трава (ярче)
+    'freeze_grass': '#6a8d7a',   // тундра
+    'dry_grass': '#8b8d46',      // сухие земли
+    'jungle': '#1f7a3a',         // тропики
+    'shrubland': '#7a7f3a',      // кустарники
 
-        // ===== ГОРЫ =====
-        'stone': '#808080',          // камень
-        'rock_peak': '#5c5c5c',      // скальные пики (темнее)
-        'snow': '#ffffff',           // снег
-        'snow_peak': '#e6f2ff',      // снежные пики (чуть голубой)
+    //Цвета растительности в растительном слое
+    'tree': '#2d4c1e',        // Обычное дерево
+    'jungle_tree': '#145228', // Тропическое дерево
+    'pine': '#1a3317',        // Хвоя (темная)
+    'bush': '#719236',        // Куст
+    'bush_cold': '#5e7361',   // Замерзший куст для тундры
+    'grass_detail': '#47da05', // Цвет травинок (чуть темнее основной травы)
+    'stone_flower': '#add8e6', // Каменный цвет (светло-голубоватый/серый)
+    'flower_red': '#e74c3c',   // Красный цветок
+    'flower_yellow': '#f1c40f', // Желтый цветок
+    'flower_white': '#ecf0f1',  // Белый цветок
+    'cactus': '#2ecc71', // Ярко-зеленый цвет кактуса
+    'sugar_cane':'#942dd8',
 
-        // ===== ХОЛМЫ / ПРЕДГОРЬЯ =====
-        'grass_rocky': '#6b7d5a',    // каменистая трава
 
-        // ===== РУДЫ =====
-        'ore_andesite': '#8a8d8f',
-        'ore_basalt': '#303030',
-        'ore_brown_limonite': '#7b5c3d',
-        'ore_yellow_limonite': '#bca05d',
-        'ore_malachite': '#2b7a4b',
-        'ore_copper': '#d37c5d',
-        'ore_cassiterite': '#333333',
-        'ore_tin': '#acacac',
-        'ore_bismuth': '#6e8b8b',
+    // ===== ПУСТЫНЯ =====
+    'desert_sand': '#f4e209',    // пустыня (ярко)
 
-        // ===== ЖИДКОСТИ =====
-        'raw_oil': '#0f0f0f',       // Очень тёмный, почти чёрный (сырая нефть)
-        'heavy_oil': '#1a0f00',      // Тёмно-коричневый (тяжёлая)
-        'light_oil': '#331a00',      // Светло-коричневый (лёгкая)
-        'oil': '#260f00',            // Средний коричневый (обычная нефть)
-    };
+    // ===== ГОРЫ =====
+    'stone': '#808080',          // камень
+    'rock_peak': '#5c5c5c',      // скальные пики (темнее)
+    'snow': '#ffffff',           // снег
+    'snow_peak': '#e6f2ff',      // снежные пики (чуть голубой)
+
+    // ===== ХОЛМЫ / ПРЕДГОРЬЯ =====
+    'grass_rocky': '#6b7d5a',    // каменистая трава
+
+    // ===== РУДЫ =====
+    'ore_andesite': '#8a8d8f',
+    'ore_basalt': '#303030',
+    'ore_brown_limonite': '#7b5c3d',
+    'ore_yellow_limonite': '#bca05d',
+    'ore_malachite': '#2b7a4b',
+    'ore_copper': '#d37c5d',
+    'ore_cassiterite': '#333333',
+    'ore_tin': '#acacac',
+    'ore_bismuth': '#6e8b8b',
+
+    // ===== ЖИДКОСТИ =====
+    'raw_oil': '#0f0f0f',       // Очень тёмный, почти чёрный (сырая нефть)
+    'heavy_oil': '#1a0f00',      // Тёмно-коричневый (тяжёлая)
+    'light_oil': '#331a00',      // Светло-коричневый (лёгкая)
+    'oil': '#260f00',            // Средний коричневый (обычная нефть)
+};
 
 
 function renderTilesToCanvas(tiles, chunkCtx) {
