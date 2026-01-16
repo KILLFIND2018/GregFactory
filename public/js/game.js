@@ -740,7 +740,7 @@ window.addEventListener('keydown', (e) => {
         isLiquidProspecting = true;
         refreshVisibleChunks();
     }
-    if (e.key.toLowerCase() === "1") {
+    if (e.key.toLowerCase() === "r") {
         regenerateWorld();
     }
     if (e.key.toLowerCase() === 'g') { // Клавиша G для сетки
