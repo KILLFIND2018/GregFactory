@@ -236,59 +236,9 @@ async function addItemToInventory(playerId, itemType, itemId, quantity = 1) {
     }
 }
 
-// Обновить блок в мире
-async function updateWorldBlock(x, y, layer, blockType, worldId = 1, amount = 1) {
-    try {
-        const response = await fetch(`${API_BASE}/blocks/update`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                world_id: worldId,
-                x: x,
-                y: y,
-                layer: layer,
-                block_type: blockType,
-                amount: amount
-            })
-        });
 
-        if (!response.ok) {
-            const text = await response.text();
-            console.error('API ERROR', response.status, text);
-            throw new Error(text);
-        }
-        return await response.json();
-    } catch (error) {
-        console.error('Ошибка обновления блока:', error);
-        return null;
-    }
-}
 
-// Удалить блок из мира
-async function removeWorldBlock(x, y, layer, worldId = 1) {
-    try {
-        const response = await fetch(`${API_BASE}/blocks/delete`, {
-            method: 'DELETE',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                world_id: worldId,
-                x: x,
-                y: y,
-                layer: layer
-            })
-        });
 
-        if (!response.ok) {
-            const text = await response.text();
-            console.error('API ERROR', response.status, text);
-            throw new Error(text);
-        }
-        return await response.json();
-    } catch (error) {
-        console.error('Ошибка удаления блока:', error);
-        return null;
-    }
-}
 
 // Добыть блок (комплексная операция)
 async function mineBlock(playerId, x, y, layer, blockType, worldId = 1) {
@@ -318,30 +268,9 @@ async function mineBlock(playerId, x, y, layer, blockType, worldId = 1) {
     }
 }
 
-// Получить сохраненные блоки для области
-async function fetchAreaBlocks(minX, maxX, minY, maxY, worldId = 1) {
-    try {
-        const response = await fetch(
-            `${API_BASE}/blocks/area?` +
-            `minX=${minX}&maxX=${maxX}&` +
-            `minY=${minY}&maxY=${maxY}&` +
-            `world_id=${worldId}`
-        );
-
-        if (!response.ok) {
-            const text = await response.text();
-            console.error('API ERROR', response.status, text);
-            throw new Error(text);
-        }
-        return await response.json();
-    } catch (error) {
-        console.error('Ошибка загрузки блоков:', error);
-        return {};
-    }
-}
 
 
-let playerId = null;
+
 let lastUpdate = 0;
 let lastSyncTime = 0;
 const UPDATE_INTERVAL = 5000; // 2 секунды между обновлениями
@@ -444,6 +373,8 @@ function checkSync() {
         syncPlayer(player);
         lastSyncTime = now;
     }
+    syncPlayerPosition();
+    syncPlayerInventory();
 }
 
 
@@ -1367,29 +1298,7 @@ function startMining(tx, ty, chunk, tile, blockInfo) {
     }, 100);
 }
 
-// функцию для определения бесконечного блока по биому
-function getInfiniteBlockForBiome(biome) {
-    switch(biome) {
-        case 'beach':
-        case 'coast':
-            return 'sand';
-        case 'desert':
-            return 'desert_sand';
-        case 'tundra':
-            return 'snow';
-        case 'mountain':
-        case 'peak':
-            return 'stone';
-        case 'ocean':
-        case 'deep_ocean':
-            return 'sand'; // Дно океана - песок
-        case 'forest':
-        case 'savanna':
-        case 'jungle':
-        default:
-            return 'dirt';
-    }
-}
+
 
 // Завершить добычу
 async function finishMining() {
@@ -1610,8 +1519,6 @@ function showLayerSelectionMenu(tx, ty, tile, chunk) {
         console.log(`${index + 1}. ${layer.name}: ${layer.type}`);
     });
 
-    // Можно добавить реальное меню в UI, но пока просто выбираем первый подходящий слой
-    const tool = playerInventory.getCurrentTool();
     let selectedLayer = null;
 
     // Ищем слой, который можно добыть текущим инструментом
@@ -1674,7 +1581,7 @@ canvas.addEventListener('click', (e) => {
 });
 
 // Добавим обработку движения для отмены добычи
-window.addEventListener('keydown', (e) => {
+window.addEventListener('keydown', () => {
     if (miningMode && (keys['a'] || keys['d'] || keys['w'] || keys['s'])) {
         cancelMining();
     }
@@ -2062,7 +1969,6 @@ function renderEnhancedUI() {
             ctx.textAlign = 'left';
 
             // Показываем информацию о всех слоях в этой клетке
-            let yOffset = 0;
             let layersText = [];
 
             if (hoverTile.e && hoverTile.e !== 'none') {
@@ -2212,42 +2118,7 @@ async function fetchBatch(batch) {
     }
 }
 
-// Функция объединения сгенерированных тайлов с сохраненными
-function mergeChunkWithSavedBlocks(generatedTiles, savedBlocks, cx, cy) {
-    // Создаем копию сгенерированных тайлов
-    const mergedTiles = JSON.parse(JSON.stringify(generatedTiles));
 
-    // Проходим по всем сохраненным блокам
-    for (const [yStr, row] of Object.entries(savedBlocks)) {
-        for (const [xStr, layers] of Object.entries(row)) {
-            const x = parseInt(xStr) - (cx * CHUNK_SIZE);
-            const y = parseInt(yStr) - (cy * CHUNK_SIZE);
-
-            // Проверяем, что координаты в пределах чанка
-            if (x >= 0 && x < CHUNK_SIZE && y >= 0 && y < CHUNK_SIZE) {
-                // Обновляем тайл сохраненными слоями
-                for (const [layer, blockType] of Object.entries(layers)) {
-                    if (layer !== 'la' && layer !== 'lm' && layer !== 'ld') {
-                        mergedTiles[y][x][layer] = blockType;
-                    }
-                }
-
-                // Обновляем данные о жидкости если есть
-                if (layers.la !== undefined) {
-                    mergedTiles[y][x].la = layers.la;
-                }
-                if (layers.lm !== undefined) {
-                    mergedTiles[y][x].lm = layers.lm;
-                }
-                if (layers.ld !== undefined) {
-                    mergedTiles[y][x].ld = layers.ld;
-                }
-            }
-        }
-    }
-
-    return mergedTiles;
-}
 
 function processChunkQueue() {
     if (chunkQueue.length === 0 || activeRequests >= MAX_CONCURRENT_REQUESTS) return;
@@ -2561,10 +2432,8 @@ function renderInventory() {
         if (!tool) continue;
 
         const isCurrent = toolId === currentTool.id;
-        const toolColor = isCurrent ? '#FFD700' : '#FFF';
-
         // Название инструмента
-        ctx.fillStyle = toolColor;
+        ctx.fillStyle = isCurrent ? '#FFD700' : '#FFF';
         ctx.font = isCurrent ? 'bold 12px Arial' : '12px Arial';
         ctx.fillText(tool.name, inventoryX + 20, inventoryY + yOffset);
 
@@ -2662,11 +2531,7 @@ async function syncPlayerInventory() {
     }
 }
 
-// Обновляем функцию checkSync
-function checkSync() {
-    syncPlayerPosition();
-    syncPlayerInventory();
-}
+
 
 const colors = {
     'void': '#1a1a2e',
@@ -2825,13 +2690,7 @@ function renderTilesToCanvas(tiles, chunkCtx) {
     }
 }
 
-// Хелпер для затемнения цвета
-function darkenColor(color, factor) {
-    const r = parseInt(color.slice(1,3),16) * factor;
-    const g = parseInt(color.slice(3,5),16) * factor;
-    const b = parseInt(color.slice(5,7),16) * factor;
-    return `rgb(${Math.floor(r)},${Math.floor(g)},${Math.floor(b)})`;
-}
+
 
 function refreshVisibleChunks() {
     chunkCache.forEach((data) => {
@@ -2945,14 +2804,12 @@ function regenerateWorld() {
 //флаг следования игрока
 let followPlayer = true;
 
-// === ИСПРАВЛЕННЫЙ ИГРОВОЙ ЦИКЛ С ТРОТТЛИНГОМ ===
-let lastFrameTime = 0;
-const FRAME_INTERVAL = 1000 / 30; // 30 FPS вместо 60
+
 
 let renderSkipCounter = 0;
 const RENDER_SKIP_FACTOR = 2; // Рендерим каждый 2й кадр
 
-function loop(timestamp) {
+function loop() {
     if (!gameInitialized) {
         requestAnimationFrame(loop);
         return;
@@ -3118,7 +2975,7 @@ function cleanupChunkCache() {
     const centerCY = Math.floor((camera.y + canvas.height / 2) / (CHUNK_SIZE * tileSize));
     const RENDER_RADIUS = 3; // Чанки в радиусе 3 от центра остаются
 
-    for (const [key, chunkData] of chunksArray) {
+    for (const key of chunksArray) {
         const [cx, cy] = key.split(',').map(Number);
         const distance = Math.sqrt(Math.pow(cx - centerCX, 2) + Math.pow(cy - centerCY, 2));
 
@@ -3141,42 +2998,9 @@ function cleanupChunkCache() {
 
 
 
-// === УПРАВЛЕНИЕ СОСТОЯНИЕМ СЕТИ ===
-let networkQuality = 'good'; // 'good', 'medium', 'poor'
-let consecutiveErrors = 0;
 
-async function adaptiveFetch(url, options = {}) {
-    const timeout = networkQuality === 'good' ? 10000 :
-        networkQuality === 'medium' ? 20000 : 30000;
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeout);
 
-    try {
-        const response = await fetch(url, {
-            ...options,
-            signal: controller.signal
-        });
-
-        clearTimeout(timeoutId);
-
-        if (response.ok) {
-            consecutiveErrors = 0;
-            networkQuality = 'good';
-        }
-
-        return response;
-    } catch (error) {
-        clearTimeout(timeoutId);
-        consecutiveErrors++;
-
-        // Адаптируем качество сети
-        if (consecutiveErrors > 5) networkQuality = 'poor';
-        else if (consecutiveErrors > 2) networkQuality = 'medium';
-
-        throw error;
-    }
-}
 
 // Периодическая синхронизация инвентаря
 setInterval(() => {
