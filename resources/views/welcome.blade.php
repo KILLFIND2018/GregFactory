@@ -27,6 +27,8 @@
     -->
     <canvas id="game"></canvas>
     <script src="/js/game.js"></script>
+    <script src="/js/test_game.js"></script>
+
 
 
 </body>

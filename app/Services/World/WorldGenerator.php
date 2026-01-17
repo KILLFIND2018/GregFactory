@@ -2,6 +2,8 @@
 
 namespace App\Services\World;
 
+use App\Models\Block;
+
 class WorldGenerator
 {
     private int $seed;
@@ -29,38 +31,80 @@ class WorldGenerator
         $this->liquidGenerator = new LiquidGenerator($planet);
     }
 
+    /**
+     * Генерация чанка с учетом сохраненных блоков
+     */
     public function generateChunk(int $cx, int $cy): array
     {
         $tiles = [];
 
-        // Получаем данные жилы (type + max_amount как VeinData)
+        // Получаем сохраненные блоки для этого чанка
+        $modifiedBlocks = $this->getModifiedBlocksForChunk($cx, $cy);
+
+        // Получаем данные жилы жидкости
         $liquidVein = $this->liquidGenerator->getLiquidVeinForChunk($cx, $cy);
 
         for ($y = 0; $y < $this->chunkSize; $y++) {
             for ($x = 0; $x < $this->chunkSize; $x++) {
                 $wx = ($cx * $this->chunkSize + $x);
                 $wy = ($cy * $this->chunkSize + $y);
-                $tiles[$y][$x] = $this->generateTile($wx, $wy);
 
-                // Жидкость с вариацией per-tile
-                if ($liquidVein) {
-                    // Плавная вариация через шум (пятна внутри чанка)
-                    $densityNoise = (Noise::noise(($wx + 1000) / 30.0, ($wy + 1000) / 30.0) + 1) / 2; // Масштаб ~30 для пятен внутри чанка
-                    // Делаем распределение неравномерным (больше пустых и полных зон)
-                    $density = pow($densityNoise, 1.3); // exponent >1 → больше низких значений
+                $tileKey = $wx . ',' . $wy;
 
+                // Если есть сохраненные изменения, используем их
+                if (isset($modifiedBlocks[$tileKey])) {
+                    $tiles[$y][$x] = $modifiedBlocks[$tileKey];
+                } else {
+                    // Генерируем новый тайл
+                    $tiles[$y][$x] = $this->generateTile($wx, $wy);
+                }
+
+                // Добавляем жидкость, если есть жила и нет сохраненной жидкости
+                if ($liquidVein && !isset($modifiedBlocks[$tileKey]['l'])) {
+                    $densityNoise = (Noise::noise(($wx + 1000) / 30.0, ($wy + 1000) / 30.0) + 1) / 2;
+                    $density = pow($densityNoise, 1.3);
                     $tileAmount = (int)floor($density * $liquidVein['max_amount']);
 
                     $tiles[$y][$x]['l'] = $liquidVein['type'];
-                    $tiles[$y][$x]['la'] = $tileAmount;         // Текущее количество в тайле
-                    $tiles[$y][$x]['lm'] = $liquidVein['max_amount']; // Максимум жилы (для пропорционального заполнения)
-                    // 'ld' для будущей добычи (decrease)
+                    $tiles[$y][$x]['la'] = $tileAmount;
+                    $tiles[$y][$x]['lm'] = $liquidVein['max_amount'];
                     $tiles[$y][$x]['ld'] = $liquidVein['decrease_per_operation'];
                 }
-                // Если $liquidVein null → ничего не добавляем (la=0 подразумевается отсутствием ключей)
             }
         }
+
         return $tiles;
+    }
+
+    /**
+     * Получить сохраненные блоки для чанка
+     */
+    private function getModifiedBlocksForChunk(int $cx, int $cy): array
+    {
+        $minX = $cx * $this->chunkSize;
+        $maxX = ($cx + 1) * $this->chunkSize - 1;
+        $minY = $cy * $this->chunkSize;
+        $maxY = ($cy + 1) * $this->chunkSize - 1;
+
+        $blocks = Block::getArea($minX, $maxX, $minY, $maxY);
+
+        $result = [];
+        foreach ($blocks as $y => $row) {
+            foreach ($row as $x => $layers) {
+                // Преобразуем координаты для ключа
+                $result[$x . ',' . $y] = $layers;
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * Сохранить изменения тайла в базе
+     */
+    public static function saveTileChanges(int $x, int $y, array $tileData, int $worldId = 1): void
+    {
+        Block::saveTile($x, $y, $tileData, $worldId);
     }
 
     private function generateTile(int $wx, int $wy): array

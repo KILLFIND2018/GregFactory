@@ -57,6 +57,10 @@ let highlightRadius = false; // Флаг для включения подсве�
 // Максимальный стак для блоков
 const MAX_STACK = 64;
 
+
+// Базовый URL API
+const API_BASE = '/api';
+
 let showInventory = true;
 // Resize
 function onResize() {
@@ -154,6 +158,189 @@ const player = {
 };
 
 
+// === КЭШИРОВАНИЕ API ЗАПРОСОВ ===
+const apiCache = new Map();
+const CACHE_TTL = 30000; // 30 секунд
+
+async function cachedFetch(url, options = {}, cacheKey = null) {
+    const key = cacheKey || url;
+    const now = Date.now();
+
+    // Проверяем кэш
+    if (apiCache.has(key)) {
+        const cached = apiCache.get(key);
+        if (now - cached.timestamp < CACHE_TTL) {
+            return cached.data;
+        }
+    }
+
+    try {
+        const response = await fetch(url, options);
+        if (!response.ok) {
+            const text = await response.text();
+            console.error('API ERROR', response.status, text);
+            throw new Error(text);
+        }
+
+        const data = await response.json();
+
+        // Сохраняем в кэш
+        apiCache.set(key, {
+            data: data,
+            timestamp: now
+        });
+
+        return data;
+    } catch (error) {
+        // Если есть закэшированные данные, возвращаем их даже если старые
+        if (apiCache.has(key)) {
+            console.log('Используем закэшированные данные из-за ошибки:', error.message);
+            return apiCache.get(key).data;
+        }
+        throw error;
+    }
+}
+
+// Получить инвентарь игрока
+async function fetchPlayerInventory(playerId) {
+    return cachedFetch(
+        `${API_BASE}/inventory?player_id=${playerId}`,
+        {},
+        `inventory_${playerId}`
+    );
+}
+
+// Добавить предмет в инвентарь
+async function addItemToInventory(playerId, itemType, itemId, quantity = 1) {
+    try {
+        const response = await fetch(`${API_BASE}/inventory/add`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                player_id: playerId,
+                item_type: itemType,
+                item_id: itemId,
+                quantity: quantity
+            })
+        });
+
+        if (!response.ok) {
+            const text = await response.text();
+            console.error('API ERROR', response.status, text);
+            throw new Error(text);
+        }
+        return await response.json();
+    } catch (error) {
+        console.error('Ошибка добавления в инвентарь:', error);
+        return null;
+    }
+}
+
+// Обновить блок в мире
+async function updateWorldBlock(x, y, layer, blockType, worldId = 1, amount = 1) {
+    try {
+        const response = await fetch(`${API_BASE}/blocks/update`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                world_id: worldId,
+                x: x,
+                y: y,
+                layer: layer,
+                block_type: blockType,
+                amount: amount
+            })
+        });
+
+        if (!response.ok) {
+            const text = await response.text();
+            console.error('API ERROR', response.status, text);
+            throw new Error(text);
+        }
+        return await response.json();
+    } catch (error) {
+        console.error('Ошибка обновления блока:', error);
+        return null;
+    }
+}
+
+// Удалить блок из мира
+async function removeWorldBlock(x, y, layer, worldId = 1) {
+    try {
+        const response = await fetch(`${API_BASE}/blocks/delete`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                world_id: worldId,
+                x: x,
+                y: y,
+                layer: layer
+            })
+        });
+
+        if (!response.ok) {
+            const text = await response.text();
+            console.error('API ERROR', response.status, text);
+            throw new Error(text);
+        }
+        return await response.json();
+    } catch (error) {
+        console.error('Ошибка удаления блока:', error);
+        return null;
+    }
+}
+
+// Добыть блок (комплексная операция)
+async function mineBlock(playerId, x, y, layer, blockType, worldId = 1) {
+    try {
+        const response = await fetch(`${API_BASE}/blocks/mine`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                player_id: playerId,
+                world_id: worldId,
+                x: x,
+                y: y,
+                layer: layer,
+                block_type: blockType
+            })
+        });
+
+        if (!response.ok) {
+            const text = await response.text();
+            console.error('API ERROR', response.status, text);
+            throw new Error(text);
+        }
+        return await response.json();
+    } catch (error) {
+        console.error('Ошибка добычи блока:', error);
+        return null;
+    }
+}
+
+// Получить сохраненные блоки для области
+async function fetchAreaBlocks(minX, maxX, minY, maxY, worldId = 1) {
+    try {
+        const response = await fetch(
+            `${API_BASE}/blocks/area?` +
+            `minX=${minX}&maxX=${maxX}&` +
+            `minY=${minY}&maxY=${maxY}&` +
+            `world_id=${worldId}`
+        );
+
+        if (!response.ok) {
+            const text = await response.text();
+            console.error('API ERROR', response.status, text);
+            throw new Error(text);
+        }
+        return await response.json();
+    } catch (error) {
+        console.error('Ошибка загрузки блоков:', error);
+        return {};
+    }
+}
+
+
 let playerId = null;
 let lastUpdate = 0;
 let lastSyncTime = 0;
@@ -161,15 +348,65 @@ const UPDATE_INTERVAL = 5000; // 2 секунды между обновлени�
 const SYNC_INTERVAL = 5000;
 
 window.spawnPlayer = async function(username) {
-    const res = await fetch('/api/player/spawn', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username })
-    });
-    const data = await res.json();
-    window.playerId = data.id;
-    return data;
+    try {
+        const res = await fetch('/api/player/spawn', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username })
+        });
+
+        if (!res.ok) throw new Error('Ошибка спавна игрока');
+
+        const data = await res.json();
+        window.playerId = data.id;
+
+        // Загружаем инвентарь игрока
+        await loadPlayerInventory(data.id);
+
+        return data;
+    } catch (error) {
+        console.error('Ошибка спавна игрока:', error);
+        throw error;
+    }
 };
+
+// Функция загрузки инвентаря
+async function loadPlayerInventory(playerId) {
+    try {
+        const res = await fetchPlayerInventory(playerId);
+        const inventory = res.inventory ?? res;
+
+        if (!inventory) {
+            console.warn('Инвентарь пуст', res);
+            return;
+        }
+
+        // Обновляем локальный инвентарь для блоков
+        if (inventory.blocks) {
+            const blocks = {};
+            for (const [blockType, data] of Object.entries(inventory.blocks)) {
+                // data может быть объектом {count: X, item: {...}} или просто числом
+                blocks[blockType] = typeof data === 'object' ? data.count : data;
+            }
+            playerInventory.blocks = blocks;
+        }
+
+        // Обновляем инструменты (если есть данные с сервера)
+        if (inventory.tools) {
+            for (const [id, tool] of Object.entries(inventory.tools)) {
+                if (playerInventory.tools[id]) {
+                    playerInventory.tools[id].durability = tool.durability;
+                }
+            }
+        }
+
+        console.log('Инвентарь загружен с сервера:', inventory);
+        return inventory;
+    } catch (error) {
+        console.error('Ошибка загрузки инвентаря:', error);
+        return null;
+    }
+}
 
 window.syncPlayer = function(player) {
     if (!window.playerId) return;
@@ -1155,7 +1392,7 @@ function getInfiniteBlockForBiome(biome) {
 }
 
 // Завершить добычу
-function finishMining() {
+async function finishMining() {
     if (!miningTarget) return;
 
     const { tx, ty, chunkData, tile, blockInfo } = miningTarget;
@@ -1172,77 +1409,144 @@ function finishMining() {
         return;
     }
 
-    // === ОСОБЫЙ СЛУЧАЙ: ПЕРСИСТЕНТНЫЕ БЛОКИ (камень) ===
-    if (resourceConfig.persistent) {
-        // Блок остается на карте, просто даем дроп
-        // Ничего не меняем в слоях тайла
+    // === ОБНОВЛЕНИЕ НА СЕРВЕРЕ ===
+    try {
+        let serverResult = null;
 
-    } else {
-        // Обычная логика замены слоя
-        switch(blockInfo.layer) {
-            case 'e':
-                tile.e = 'none';
-                break;
+        if (resourceConfig.persistent) {
+            // Для персистентных блоков (камень) блок остается на карте
+            // Просто добавляем дроп в инвентарь
+            if (resourceConfig.drop > 0 && window.playerId) {
+                serverResult = await addItemToInventory(
+                    window.playerId,
+                    'block',
+                    blockInfo.type,
+                    resourceConfig.drop
+                );
+            }
+        } else {
+            // Для обычных блоков отправляем запрос на добычу
+            serverResult = await mineBlock(
+                window.playerId,
+                tx,
+                ty,
+                blockInfo.layer,
+                blockInfo.type
+            );
 
-            case 's':
-                if (tile.g && tile.g !== 'none') {
-                    tile.s = tile.g;
-                    tile.g = 'none';
-                } else if (tile.p && tile.p !== 'none') {
-                    tile.s = tile.p;
-                    tile.p = 'none';
-                } else if (tile.o && tile.o !== 'none') {
-                    tile.s = tile.o;
-                    tile.o = 'none';
-                } else {
-                    // Достигли скальной породы
-                    tile.s = tile.r || 'stone';
-                }
-                break;
-
-            case 'g':
-                if (tile.p && tile.p !== 'none') {
-                    tile.s = tile.p;
-                    tile.p = 'none';
-                } else if (tile.o && tile.o !== 'none') {
-                    tile.s = tile.o;
-                    tile.o = 'none';
-                } else {
-                    tile.s = tile.r || 'stone';
-                }
-                tile.g = 'none';
-                break;
-
-            case 'p':
-                if (tile.o && tile.o !== 'none') {
-                    tile.s = tile.o;
-                    tile.o = 'none';
-                } else {
-                    tile.s = tile.r || 'stone';
-                }
-                tile.p = 'none';
-                break;
-
-            case 'o':
-                tile.o = 'none';
-                tile.s = tile.r || 'stone';
-                break;
+            // Если сервер вернул ошибку, отменяем добычу
+            if (!serverResult || !serverResult.success) {
+                throw new Error(serverResult?.error || 'Ошибка добычи на сервере');
+            }
         }
+
+        // === ОБНОВЛЕНИЕ НА КЛИЕНТЕ ===
+
+// Обычная логика замены слоя
+        if (!resourceConfig.persistent) {
+            switch(blockInfo.layer) {
+                case 'e':
+                    tile.e = 'none';
+                    break;
+
+                case 's':
+                    if (tile.g && tile.g !== 'none') {
+                        tile.s = tile.g;
+                        tile.g = 'none';
+                    } else if (tile.p && tile.p !== 'none') {
+                        tile.s = tile.p;
+                        tile.p = 'none';
+                    } else if (tile.o && tile.o !== 'none') {
+                        tile.s = tile.o;
+                        tile.o = 'none';
+                    } else {
+                        // Достигли скальной породы
+                        tile.s = tile.r || 'stone';
+                    }
+                    break;
+
+                case 'g':
+                    if (tile.p && tile.p !== 'none') {
+                        tile.s = tile.p;
+                        tile.p = 'none';
+                    } else if (tile.o && tile.o !== 'none') {
+                        tile.s = tile.o;
+                        tile.o = 'none';
+                    } else {
+                        tile.s = tile.r || 'stone';
+                    }
+                    tile.g = 'none';
+                    break;
+
+                case 'p':
+                    if (tile.o && tile.o !== 'none') {
+                        tile.s = tile.o;
+                        tile.o = 'none';
+                    } else {
+                        tile.s = tile.r || 'stone';
+                    }
+                    tile.p = 'none';
+                    break;
+
+                case 'o':
+                    tile.o = 'none';
+                    tile.s = tile.r || 'stone';
+                    break;
+            }
+
+            // ВАЖНО: Сохраняем изменения тайла в базе
+            await saveTileChanges(tx, ty, tile);
+        }
+
+        // Добавляем добытый блок в локальный инвентарь
+        if (resourceConfig.drop > 0) {
+            playerInventory.addBlock(blockInfo.type, resourceConfig.drop);
+
+            // Обновляем инвентарь на сервере (если еще не обновляли)
+            if (!resourceConfig.persistent && window.playerId) {
+                await addItemToInventory(
+                    window.playerId,
+                    'block',
+                    blockInfo.type,
+                    resourceConfig.drop
+                );
+            }
+        }
+
+        // Используем инструмент
+        playerInventory.useTool();
+
+        // Обновляем прочность инструмента на сервере
+        if (window.playerId) {
+            const tool = playerInventory.getCurrentTool();
+            if (tool.durability !== Infinity) {
+                await fetch(`${API_BASE}/inventory/update-tool`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        player_id: window.playerId,
+                        tool_id: tool.id,
+                        durability: tool.durability
+                    })
+                });
+            }
+        }
+
+        // Перерисовываем чанк
+        refreshChunk(chunkData);
+
+        // Очищаем кэш чанков, чтобы изменения отобразились
+        cleanupChunkCache();
+
+        console.log(`Добыт блок: ${blockInfo.type}${resourceConfig.persistent ? ' (остается на карте)' : ''}`);
+        console.log('Результат сервера:', serverResult);
+
+    } catch (error) {
+        console.error('Ошибка синхронизации с сервером:', error);
+        // Можно показать сообщение об ошибке пользователю
+        alert('Ошибка синхронизации с сервером: ' + error.message);
+
     }
-
-    // Добавляем добытый блок в инвентарь (если есть дроп)
-    if (resourceConfig.drop > 0) {
-        playerInventory.addBlock(blockInfo.type, resourceConfig.drop);
-        console.log(`Добавлено в инвентарь: ${resourceConfig.drop} ${blockInfo.type}`);
-    }
-
-    // Используем инструмент
-    playerInventory.useTool();
-
-    // Перерисовываем чанк
-    refreshChunk(chunkData);
-
-    console.log(`Добыт блок: ${blockInfo.type}${resourceConfig.persistent ? ' (остается на карте)' : ''}`);
 
     // Сбрасываем состояние добычи
     miningMode = false;
@@ -1615,6 +1919,34 @@ function getLayerName(layer) {
 function renderEnhancedUI() {
     const tool = playerInventory.getCurrentTool();
 
+    // Панель состояния соединения
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+    ctx.fillRect(canvas.width - 250, canvas.height - 100, 230, 80);
+
+    ctx.fillStyle = '#FFF';
+    ctx.font = '12px Arial';
+    ctx.textAlign = 'left';
+
+    // ID игрока
+    if (window.playerId) {
+        ctx.fillText(`Игрок ID: ${window.playerId}`, canvas.width - 240, canvas.height - 85);
+    } else {
+        ctx.fillStyle = '#FF6B6B';
+        ctx.fillText('Не подключен к серверу', canvas.width - 240, canvas.height - 85);
+    }
+
+    // Позиция
+    ctx.fillStyle = '#FFF';
+    ctx.fillText(`Позиция: ${player.x.toFixed(2)}, ${player.y.toFixed(2)}`, canvas.width - 240, canvas.height - 70);
+
+    // Чанки
+    const loadedChunks = chunkCache.size;
+    ctx.fillText(`Загружено чанков: ${loadedChunks}`, canvas.width - 240, canvas.height - 55);
+
+    // Время синхронизации
+    const lastSync = Math.floor((Date.now() - lastPositionSync) / 1000);
+    ctx.fillText(`Синхронизация: ${lastSync}с назад`, canvas.width - 240, canvas.height - 40);
+
     // Панель инструментов
     ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
     ctx.fillRect(10, canvas.height - 150, 280, 140);
@@ -1791,7 +2123,8 @@ window.addEventListener('keydown', (e) => {
 
 // Chunk management
 const CHUNK_SIZE = 16;
-const MAX_CONCURRENT_REQUESTS = 10;
+const MAX_CONCURRENT_REQUESTS = 3;
+const BATCH_SIZE = 8; // Уменьшаем размер батча
 let activeRequests = 0;
 const loadingChunks = new Set();
 const chunkCache = new Map();
@@ -1803,17 +2136,22 @@ let isLiquidProspecting = false;
 let showGrid = false;
 
 // Вспомогательная функция для создания холста чанка
+// Вызываем очистку при добавлении нового чанка
 function createChunkObject(tiles, cx, cy) {
     const c = document.createElement('canvas');
     c.width = CHUNK_SIZE * baseTileSize;
     c.height = CHUNK_SIZE * baseTileSize;
     const chunkCtx = c.getContext('2d');
 
-    // Сохраняем координаты чанка
     chunkCtx.chunkX = cx;
     chunkCtx.chunkY = cy;
 
     renderTilesToCanvas(tiles, chunkCtx);
+
+    // Очищаем кэш если нужно
+    if (chunkCache.size >= MAX_CHUNK_CACHE) {
+        cleanupChunkCache();
+    }
 
     return {
         canvas: c,
@@ -1843,13 +2181,25 @@ function enqueueChunk(cx, cy, priority) {
 async function fetchBatch(batch) {
     activeRequests++;
     const batchStr = batch.map(c => `${c.cx},${c.cy}`).join(';');
-    try {
-        const res = await fetch(`/api/chunk?batch=${batchStr}&seed=${currentSeed}`);
-        if (!res.ok) throw new Error('Batch fetch failed');
-        const data = await res.json();
 
-        for (const [key, tiles] of Object.entries(data)) {
+    try {
+        // Добавляем таймаут для запроса
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+        const res = await fetch(`/api/chunk?batch=${batchStr}&seed=${currentSeed}`, {
+            signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!res.ok) throw new Error('Batch fetch failed');
+        const generatedChunks = await res.json();
+
+        for (const [key, tiles] of Object.entries(generatedChunks)) {
             const [cx, cy] = key.split(',').map(Number);
+
+            // Создаем объект чанка без загрузки сохраненных блоков на каждом кадре
             chunkCache.set(key, createChunkObject(tiles, cx, cy));
             loadingChunks.delete(key);
         }
@@ -1862,9 +2212,46 @@ async function fetchBatch(batch) {
     }
 }
 
+// Функция объединения сгенерированных тайлов с сохраненными
+function mergeChunkWithSavedBlocks(generatedTiles, savedBlocks, cx, cy) {
+    // Создаем копию сгенерированных тайлов
+    const mergedTiles = JSON.parse(JSON.stringify(generatedTiles));
+
+    // Проходим по всем сохраненным блокам
+    for (const [yStr, row] of Object.entries(savedBlocks)) {
+        for (const [xStr, layers] of Object.entries(row)) {
+            const x = parseInt(xStr) - (cx * CHUNK_SIZE);
+            const y = parseInt(yStr) - (cy * CHUNK_SIZE);
+
+            // Проверяем, что координаты в пределах чанка
+            if (x >= 0 && x < CHUNK_SIZE && y >= 0 && y < CHUNK_SIZE) {
+                // Обновляем тайл сохраненными слоями
+                for (const [layer, blockType] of Object.entries(layers)) {
+                    if (layer !== 'la' && layer !== 'lm' && layer !== 'ld') {
+                        mergedTiles[y][x][layer] = blockType;
+                    }
+                }
+
+                // Обновляем данные о жидкости если есть
+                if (layers.la !== undefined) {
+                    mergedTiles[y][x].la = layers.la;
+                }
+                if (layers.lm !== undefined) {
+                    mergedTiles[y][x].lm = layers.lm;
+                }
+                if (layers.ld !== undefined) {
+                    mergedTiles[y][x].ld = layers.ld;
+                }
+            }
+        }
+    }
+
+    return mergedTiles;
+}
+
 function processChunkQueue() {
     if (chunkQueue.length === 0 || activeRequests >= MAX_CONCURRENT_REQUESTS) return;
-    const batch = chunkQueue.splice(0, 16);
+    const batch = chunkQueue.splice(0, BATCH_SIZE);
     fetchBatch(batch);
 }
 
@@ -1873,7 +2260,7 @@ function preloadInitialChunks() {
     const centerX = Math.floor((camera.x + canvas.width / 2) / screenChunkSize);
     const centerY = Math.floor((camera.y + canvas.height / 2) / screenChunkSize);
 
-    const RADIUS = 4; // Сокращаем радиус до минимума для быстрого старта
+    const RADIUS = 2; // Сокращаем радиус до минимума для быстрого старта
 
     for (let i = 0; i <= RADIUS; i++) {
         for (let dx = -i; dx <= i; dx++) {
@@ -2070,22 +2457,215 @@ function renderRadiusHighlight() {
     }
 }
 
-//Показ инвентаря
+// Показ инвентаря
 function renderInventory() {
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
-    ctx.fillRect(canvas.width - 250, 20, 230, 200);
+    const inventoryX = canvas.width - 250;
+    const inventoryY = 20;
+    const inventoryWidth = 230;
 
+    // Рассчитываем высоту инвентаря на основе количества предметов
+    const blockCount = Object.keys(playerInventory.blocks).length;
+    const inventoryHeight = Math.max(200, 40 + (blockCount * 20));
+
+    // Фон инвентаря
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+    ctx.fillRect(inventoryX, inventoryY, inventoryWidth, inventoryHeight);
+
+    // Заголовок
     ctx.fillStyle = '#FFF';
     ctx.font = '16px Arial';
-    ctx.fillText('Инвентарь', canvas.width - 240, 40);
+    ctx.textAlign = 'center';
+    ctx.fillText('Инвентарь', inventoryX + inventoryWidth / 2, inventoryY + 25);
 
-    let y = 60;
-    for (const [block, count] of Object.entries(playerInventory.blocks)) {
-        if (count > 0) {
-            ctx.fillText(`${block}: ${count}`, canvas.width - 240, y);
-            y += 20;
+    // Разделительная линия
+    ctx.strokeStyle = '#555';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(inventoryX + 10, inventoryY + 35);
+    ctx.lineTo(inventoryX + inventoryWidth - 10, inventoryY + 35);
+    ctx.stroke();
+
+    // Список блоков
+    ctx.fillStyle = '#FFF';
+    ctx.font = '12px Arial';
+    ctx.textAlign = 'left';
+
+    let yOffset = 50;
+
+    if (blockCount === 0) {
+        ctx.fillStyle = '#888';
+        ctx.textAlign = 'center';
+        ctx.fillText('Инвентарь пуст', inventoryX + inventoryWidth / 2, inventoryY + yOffset);
+        yOffset += 20;
+    } else {
+        // Сортируем блоки по названию
+        const sortedBlocks = Object.entries(playerInventory.blocks)
+            .filter(([_, count]) => count > 0)
+            .sort(([a], [b]) => a.localeCompare(b));
+
+        for (const [blockType, count] of sortedBlocks) {
+            const maxStack = RESOURCE_CONFIG[blockType]?.maxStack || MAX_STACK;
+            const percentage = (count / maxStack) * 100;
+
+            // Название блока
+            ctx.fillStyle = '#FFF';
+            ctx.fillText(`${blockType}: ${count}`, inventoryX + 15, inventoryY + yOffset);
+
+            // Полоска заполненности стака
+            if (maxStack > 1) {
+                const barWidth = 80;
+                const barHeight = 8;
+                const barX = inventoryX + inventoryWidth - barWidth - 15;
+                const barY = inventoryY + yOffset - 6;
+
+                // Фон полоски
+                ctx.fillStyle = '#333';
+                ctx.fillRect(barX, barY, barWidth, barHeight);
+
+                // Заполненная часть
+                ctx.fillStyle = percentage > 80 ? '#4CAF50' :
+                    percentage > 50 ? '#8BC34A' :
+                        percentage > 30 ? '#FFC107' : '#F44336';
+                ctx.fillRect(barX, barY, (barWidth * percentage) / 100, barHeight);
+
+                // Обводка
+                ctx.strokeStyle = '#555';
+                ctx.lineWidth = 1;
+                ctx.strokeRect(barX, barY, barWidth, barHeight);
+            }
+
+            yOffset += 20;
+
+            // Ограничиваем максимальное количество отображаемых блоков
+            if (yOffset > inventoryY + inventoryHeight - 20) {
+                ctx.fillStyle = '#888';
+                ctx.fillText('... и другие', inventoryX + 15, inventoryY + yOffset);
+                break;
+            }
         }
     }
+
+    // Инструменты
+    yOffset += 10;
+    ctx.fillStyle = '#FFF';
+    ctx.font = '14px Arial';
+    ctx.fillText('Инструменты:', inventoryX + 15, inventoryY + yOffset);
+    yOffset += 20;
+
+    const currentTool = playerInventory.getCurrentTool();
+
+    // Список инструментов
+    const tools = ['hand', 'axe', 'shovel', 'pickaxe'];
+    for (const toolId of tools) {
+        const tool = playerInventory.tools[toolId];
+        if (!tool) continue;
+
+        const isCurrent = toolId === currentTool.id;
+        const toolColor = isCurrent ? '#FFD700' : '#FFF';
+
+        // Название инструмента
+        ctx.fillStyle = toolColor;
+        ctx.font = isCurrent ? 'bold 12px Arial' : '12px Arial';
+        ctx.fillText(tool.name, inventoryX + 20, inventoryY + yOffset);
+
+        // Прочность
+        if (tool.durability !== Infinity) {
+            const durabilityPercent = (tool.durability / TOOLS_CONFIG[toolId].durability) * 100;
+            const durabilityText = isCurrent ? `${tool.durability}/${TOOLS_CONFIG[toolId].durability}` : '';
+
+            ctx.fillStyle = '#888';
+            ctx.font = '10px Arial';
+            ctx.textAlign = 'right';
+            ctx.fillText(durabilityText, inventoryX + inventoryWidth - 15, inventoryY + yOffset);
+
+            // Полоска прочности
+            if (isCurrent) {
+                const barWidth = 60;
+                const barHeight = 4;
+                const barX = inventoryX + inventoryWidth - barWidth - 60;
+                const barY = inventoryY + yOffset + 4;
+
+                ctx.fillStyle = '#333';
+                ctx.fillRect(barX, barY, barWidth, barHeight);
+
+                ctx.fillStyle = durabilityPercent > 50 ? '#4CAF50' :
+                    durabilityPercent > 20 ? '#FF9800' : '#F44336';
+                ctx.fillRect(barX, barY, (barWidth * durabilityPercent) / 100, barHeight);
+            }
+        }
+
+        yOffset += 16;
+        ctx.textAlign = 'left';
+    }
+}
+
+// Интервалы синхронизации
+const SYNC_POSITION_INTERVAL = 30000; // 30 секунд
+const SYNC_INVENTORY_INTERVAL = 60000; // 60 секунд
+
+let lastPositionSync = 0;
+let lastInventorySync = 0;
+
+// Флаги для предотвращения одновременных запросов
+let isSyncingPosition = false;
+let isSyncingInventory = false;
+
+// === ИСПРАВЛЕННАЯ ФУНКЦИЯ СИНХРОНИЗАЦИИ ПОЗИЦИИ ===
+async function syncPlayerPosition() {
+    if (!window.playerId || isSyncingPosition) return;
+
+    const now = Date.now();
+    if (now - lastPositionSync < SYNC_POSITION_INTERVAL) return;
+
+    isSyncingPosition = true;
+
+    try {
+        await fetch('/api/player/update', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                id: window.playerId,
+                x: Math.round(player.x * 100) / 100,
+                y: Math.round(player.y * 100) / 100,
+                hp: player.hp
+            })
+        });
+
+        lastPositionSync = now;
+    } catch (error) {
+        console.error('Ошибка синхронизации позиции:', error);
+        // При ошибке увеличиваем интервал до 30 секунд
+        lastPositionSync = now - SYNC_POSITION_INTERVAL + 30000;
+    } finally {
+        isSyncingPosition = false;
+    }
+}
+
+// === ИСПРАВЛЕННАЯ ФУНКЦИЯ СИНХРОНИЗАЦИИ ИНВЕНТАРЯ ===
+async function syncPlayerInventory() {
+    if (!window.playerId || isSyncingInventory) return;
+
+    const now = Date.now();
+    if (now - lastInventorySync < SYNC_INVENTORY_INTERVAL) return;
+
+    isSyncingInventory = true;
+
+    try {
+        await loadPlayerInventory(window.playerId);
+        lastInventorySync = now;
+    } catch (error) {
+        console.error('Ошибка синхронизации инвентаря:', error);
+        // При ошибке увеличиваем интервал до 60 секунд
+        lastInventorySync = now - SYNC_INVENTORY_INTERVAL + 60000;
+    } finally {
+        isSyncingInventory = false;
+    }
+}
+
+// Обновляем функцию checkSync
+function checkSync() {
+    syncPlayerPosition();
+    syncPlayerInventory();
 }
 
 const colors = {
@@ -2263,6 +2843,49 @@ function refreshVisibleChunks() {
     });
 }
 
+// Сохранить изменения тайла в мире
+async function saveTileChanges(x, y, tile, worldId = 1) {
+    try {
+        // Собираем все слои для сохранения
+        const layers = {};
+
+        // Сохраняем только непустые слои
+        if (tile.e && tile.e !== 'none') layers.e = tile.e;
+        if (tile.s && tile.s !== 'none') layers.s = tile.s;
+        if (tile.g && tile.g !== 'none') layers.g = tile.g;
+        if (tile.o && tile.o !== 'none') layers.o = tile.o;
+        if (tile.p && tile.p !== 'none') layers.p = tile.p;
+        if (tile.r && tile.r !== 'none') layers.r = tile.r;
+        if (tile.l && tile.l !== 'none') {
+            layers.l = tile.l;
+            if (tile.la !== undefined) layers.la = tile.la;
+            if (tile.lm !== undefined) layers.lm = tile.lm;
+            if (tile.ld !== undefined) layers.ld = tile.ld;
+        }
+
+        const response = await fetch(`${API_BASE}/blocks/update-tile`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                world_id: worldId,
+                x: x,
+                y: y,
+                layers: layers
+            })
+        });
+
+        if (!response.ok) {
+            const text = await response.text();
+            console.error('API ERROR', response.status, text);
+            throw new Error(text);
+        }
+        return await response.json();
+    } catch (error) {
+        console.error('Ошибка сохранения тайла:', error);
+        return null;
+    }
+}
+
 // Controls
 window.addEventListener('keydown', (e) => {
     if (e.key.toLowerCase() === 'p' && !isOreProspecting) {
@@ -2322,9 +2945,24 @@ function regenerateWorld() {
 //флаг следования игрока
 let followPlayer = true;
 
+// === ИСПРАВЛЕННЫЙ ИГРОВОЙ ЦИКЛ С ТРОТТЛИНГОМ ===
+let lastFrameTime = 0;
+const FRAME_INTERVAL = 1000 / 30; // 30 FPS вместо 60
 
+let renderSkipCounter = 0;
+const RENDER_SKIP_FACTOR = 2; // Рендерим каждый 2й кадр
 
-function loop() {
+function loop(timestamp) {
+    if (!gameInitialized) {
+        requestAnimationFrame(loop);
+        return;
+    }
+
+    // Пропускаем кадры для рендеринга
+    renderSkipCounter++;
+    const shouldRender = renderSkipCounter % RENDER_SKIP_FACTOR === 0;
+
+    // Физика всегда рассчитывается
     if (!isDragging) {
         camera.x -= velocityX;
         camera.y -= velocityY;
@@ -2333,28 +2971,31 @@ function loop() {
     }
 
     processChunkQueue();
-    ctx.fillStyle = "#000";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // Камера следует за игроком
-    updatePlayer();
-    if (followPlayer) {
-        camera.x = player.x * tileSize - canvas.width / 2;
-        camera.y = player.y * tileSize - canvas.height / 2;
+    if (shouldRender) {
+        ctx.fillStyle = "#000";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        updatePlayer();
+        if (followPlayer) {
+            camera.x = player.x * tileSize - canvas.width / 2;
+            camera.y = player.y * tileSize - canvas.height / 2;
+        }
+
+        renderWorld();
+        renderMiningPreview();
+        renderRadiusHighlight();
+        renderPlayer();
+        renderMiningProgress();
+        renderEnhancedUI();
+        renderInventory();
     }
 
-    renderWorld();
-    renderMiningPreview();
-    renderRadiusHighlight();
-    renderPlayer();
-    renderMiningProgress();
-    renderEnhancedUI(); // Используем улучшенный UI
+    // Синхронизация раз в 10 кадров
+    if (renderSkipCounter % 10 === 0) {
+        checkSync();
+    }
 
-    if (showInventory) {
-        renderInventory();
-    } // инвентарь
-
-    checkSync();
     requestAnimationFrame(loop);
 }
 
@@ -2363,3 +3004,232 @@ document.addEventListener("DOMContentLoaded", () => {
     preloadInitialChunks();
     requestAnimationFrame(loop);
 });
+
+// Глобальный обработчик ошибок
+window.addEventListener('error', function(event) {
+    console.error('Глобальная ошибка:', event.error);
+
+    // Показываем уведомление пользователю
+    if (event.error.message && event.error.message.includes('fetch') ||
+        event.error.message.includes('network')) {
+        showNetworkError('Проблема с соединением. Проверьте интернет.');
+    }
+});
+
+// Функция показа ошибки сети
+function showNetworkError(message) {
+    // Создаем элемент для отображения ошибки
+    let errorDiv = document.getElementById('network-error');
+
+    if (!errorDiv) {
+        errorDiv = document.createElement('div');
+        errorDiv.id = 'network-error';
+        errorDiv.style.cssText = `
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(244, 67, 54, 0.9);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 5px;
+            z-index: 10000;
+            font-family: Arial;
+            font-size: 14px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+        `;
+        document.body.appendChild(errorDiv);
+    }
+
+    errorDiv.textContent = message;
+    errorDiv.style.display = 'block';
+
+    // Автоматическое скрытие через 5 секунд
+    setTimeout(() => {
+        errorDiv.style.display = 'none';
+    }, 5000);
+}
+
+// Флаг инициализации
+let gameInitialized = false;
+
+async function initializeGame() {
+    if (gameInitialized) return;
+
+    try {
+        // Инициализация canvas
+        onResize();
+
+        // Спавн игрока
+        if (!window.playerId) {
+            const serverPlayer = await spawnPlayer("DevPlayer");
+            if (serverPlayer) {
+                player.x = serverPlayer.x;
+                player.y = serverPlayer.y;
+            }
+        }
+
+        // Предзагрузка чанков
+        preloadInitialChunks();
+
+        // Запуск игрового цикла
+        gameInitialized = true;
+        requestAnimationFrame(loop);
+
+        console.log('Игра инициализирована');
+    } catch (error) {
+        console.error('Ошибка инициализации игры:', error);
+        showNetworkError('Ошибка загрузки игры. Перезагрузите страницу.');
+    }
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+    // Запускаем инициализацию
+    initializeGame();
+
+    // Периодическая проверка соединения
+    setInterval(() => {
+        if (!window.playerId && gameInitialized) {
+            console.warn('Потеряно соединение с сервером');
+            showNetworkError('Потеряно соединение. Попытка переподключения...');
+
+            // Попытка переподключения
+            setTimeout(() => {
+                initializeGame();
+            }, 3000);
+        }
+    }, 30000); // Проверка каждые 30 секунд
+});
+
+// === ОГРАНИЧЕНИЕ КЭША ЧАНКОВ ===
+const MAX_CHUNK_CACHE = 50; // Максимум 50 чанков в кэше
+
+// Вспомогательная функция для очистки старых чанков
+function cleanupChunkCache() {
+    if (chunkCache.size <= MAX_CHUNK_CACHE) return;
+
+    // Сортируем чанки по времени загрузки (старые первыми)
+    const chunksArray = Array.from(chunkCache.entries())
+        .sort((a, b) => a[1].loadedAt - b[1].loadedAt);
+
+    // Удаляем старые чанки, но оставляем те, что в области видимости
+    const toRemove = [];
+    const centerCX = Math.floor((camera.x + canvas.width / 2) / (CHUNK_SIZE * tileSize));
+    const centerCY = Math.floor((camera.y + canvas.height / 2) / (CHUNK_SIZE * tileSize));
+    const RENDER_RADIUS = 3; // Чанки в радиусе 3 от центра остаются
+
+    for (const [key, chunkData] of chunksArray) {
+        const [cx, cy] = key.split(',').map(Number);
+        const distance = Math.sqrt(Math.pow(cx - centerCX, 2) + Math.pow(cy - centerCY, 2));
+
+        if (distance > RENDER_RADIUS) {
+            toRemove.push(key);
+        }
+
+        if (chunkCache.size - toRemove.length <= MAX_CHUNK_CACHE) {
+            break;
+        }
+    }
+
+    // Удаляем выбранные чанки
+    for (const key of toRemove) {
+        chunkCache.delete(key);
+    }
+
+    console.log(`Очищен кэш чанков. Удалено: ${toRemove.length}, осталось: ${chunkCache.size}`);
+}
+
+
+
+// === УПРАВЛЕНИЕ СОСТОЯНИЕМ СЕТИ ===
+let networkQuality = 'good'; // 'good', 'medium', 'poor'
+let consecutiveErrors = 0;
+
+async function adaptiveFetch(url, options = {}) {
+    const timeout = networkQuality === 'good' ? 10000 :
+        networkQuality === 'medium' ? 20000 : 30000;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+    try {
+        const response = await fetch(url, {
+            ...options,
+            signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        if (response.ok) {
+            consecutiveErrors = 0;
+            networkQuality = 'good';
+        }
+
+        return response;
+    } catch (error) {
+        clearTimeout(timeoutId);
+        consecutiveErrors++;
+
+        // Адаптируем качество сети
+        if (consecutiveErrors > 5) networkQuality = 'poor';
+        else if (consecutiveErrors > 2) networkQuality = 'medium';
+
+        throw error;
+    }
+}
+
+// Периодическая синхронизация инвентаря
+setInterval(() => {
+    if (window.playerId) {
+        loadPlayerInventory(window.playerId);
+    }
+}, 10000); // Синхронизация каждые 10 секунд
+
+// ==============================================
+// 📤 ЭКСПОРТ ПЕРЕМЕННЫХ ДЛЯ ТЕСТОВ
+// ==============================================
+
+if (typeof window !== 'undefined') {
+    // Основные объекты
+    window.gamePlayer = player;
+    window.gameInventory = playerInventory;
+    window.gameCamera = camera;
+    window.gameCanvas = canvas;
+    window.gameCtx = ctx;
+    window.gameKeys = keys;
+    window.gameChunkCache = chunkCache;
+
+    // Переменные состояния
+    window.gameTileSize = tileSize;
+    window.gameZoom = zoom;
+    window.gameLastPositionSync = lastPositionSync;
+    window.gameShowInventory = showInventory;
+    window.gameShowGrid = showGrid;
+    window.gameMiningMode = miningMode;
+    window.gameMiningProgress = miningProgress;
+    window.gamePlayerId = window.playerId;
+
+    // Функции
+    window.gameGetTileAt = getTileAt;
+    window.gameIsBlockInRange = isBlockInRange;
+    window.gameStartMining = startMining;
+    window.gameCancelMining = cancelMining;
+    window.gameCleanupChunkCache = cleanupChunkCache;
+
+    // Константы
+    window.gameMaxChunkCache = MAX_CHUNK_CACHE;
+    window.gameMaxStack = MAX_STACK;
+    window.gameChunkSize = CHUNK_SIZE;
+    window.gameMiningRadius = MINING_RADIUS;
+
+    // API функции
+    window.gameFetchPlayerInventory = fetchPlayerInventory;
+    window.gameLoadPlayerInventory = loadPlayerInventory;
+
+    // Экспорт конфигураций для тестов
+    window.RESOURCE_CONFIG = RESOURCE_CONFIG;
+    window.BLOCKS_CONFIG = BLOCKS_CONFIG;
+    window.TOOLS_CONFIG = TOOLS_CONFIG;
+
+    console.log('🎮 Игровые переменные экспортированы для тестирования');
+}
