@@ -47,6 +47,17 @@ const camera = {
 let visibleTilesX = 0;
 let visibleTilesY = 0;
 
+// Отслеживание мыши
+let mouseX = 0;
+let mouseY = 0;
+
+
+let highlightRadius = false; // Флаг для включения подсветки радиуса
+
+// Максимальный стак для блоков
+const MAX_STACK = 64;
+
+let showInventory = true;
 // Resize
 function onResize() {
     canvas.width = window.innerWidth;
@@ -105,6 +116,16 @@ window.addEventListener("mousemove", (e) => {
     velocityY = dy;
     lastMouseX = e.clientX;
     lastMouseY = e.clientY;
+    // Сбрасываем координаты мыши при выходе за пределы канваса
+    mouseX = -1;
+    mouseY = -1;
+});
+
+canvas.addEventListener("mouseenter", (e) => {
+    // При входе в канвас обновляем координаты
+    const rect = canvas.getBoundingClientRect();
+    mouseX = e.clientX - rect.left;
+    mouseY = e.clientY - rect.top;
 });
 
 //Player
@@ -133,11 +154,61 @@ const player = {
 };
 
 
+let playerId = null;
+let lastUpdate = 0;
+let lastSyncTime = 0;
+const UPDATE_INTERVAL = 5000; // 2 секунды между обновлениями
+const SYNC_INTERVAL = 5000;
 
+window.spawnPlayer = async function(username) {
+    const res = await fetch('/api/player/spawn', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username })
+    });
+    const data = await res.json();
+    window.playerId = data.id;
+    return data;
+};
 
-setInterval(() => {
-    syncPlayer(player);
-}, 1000);
+window.syncPlayer = function(player) {
+    if (!window.playerId) return;
+
+    // Троттлинг: обновляем не чаще чем раз в UPDATE_INTERVAL мс
+    const now = Date.now();
+    if (now - lastUpdate < UPDATE_INTERVAL) return;
+
+    // Обновляем только если позиция изменилась
+    const lastX = localStorage.getItem('lastPlayerX');
+    const lastY = localStorage.getItem('lastPlayerY');
+
+    if (lastX === player.x && lastY === player.y) return;
+
+    fetch('/api/player/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            id: window.playerId,
+            x: Math.round(player.x * 100) / 100,
+            y: Math.round(player.y * 100) / 100,
+            hp: player.hp
+        })
+    }).catch(err => console.error('Sync failed:', err));
+
+    // Сохраняем последнюю позицию
+    localStorage.setItem('lastPlayerX', player.x);
+    localStorage.setItem('lastPlayerY', player.y);
+    lastUpdate = now;
+};
+
+function checkSync() {
+    const now = Date.now();
+    if (now - lastSyncTime > SYNC_INTERVAL) {
+        syncPlayer(player);
+        lastSyncTime = now;
+    }
+}
+
 
 //коллизия и взаимодествие игрока с миром
 function getSurfaceEffect(tile) {
@@ -266,7 +337,6 @@ function updatePlayer() {
         const aheadHeight = getBiomeHeight(aheadTile.b);
         const heightDiff = aheadHeight - currentHeight;
 
-        console.log(`🔍 Смотрим вперед: ${currentTile.b}(${currentHeight}) → ${aheadTile.b}(${aheadHeight})`);
 
         // === ОТЛИЧИЕ ВЫСОТ = ПРЫЖОК/СПУСК ===
         if (Math.abs(heightDiff) === 1) {
@@ -350,8 +420,1374 @@ function isAutostepTransition(currentBiome, targetBiome) {
 }
 
 
+// Конфигурация инструментов (похожа на GregTech/IguanaTweaks)
+const TOOLS_CONFIG = {
+    hand: {
+        id: 'hand',
+        name: 'Рука',
+        durability: Infinity,
+        miningLevel: 0,
+        miningSpeed: 1.0,
+        damage: 1,
+        // Какие типы блоков может добывать
+        canMine: {
+            'plant': true,    // Растения
+            'dirt': true,     // Земля, песок, гравий
+            'wood': true,     // Деревья
+        }
+    },
+    axe: {
+        id: 'axe',
+        name: 'Деревянный топор',
+        durability: 60,
+        miningLevel: 1,
+        miningSpeed: 2.0,
+        damage: 4,
+        canMine: {
+            'plant': true,
+            'dirt': false,
+            'wood': true,
+            'leaves': true,
+        }
+    },
+    shovel: {
+        id: 'shovel',
+        name: 'Деревянная лопата',
+        durability: 60,
+        miningLevel: 1,
+        miningSpeed: 2.0,
+        damage: 3,
+        canMine: {
+            'plant': false,
+            'dirt': true,
+            'sand': true,
+            'gravel': true,
+            'clay': true,
+        }
+    },
+    pickaxe: {
+        id: 'pickaxe',
+        name: 'Деревянная кирка',
+        durability: 60,
+        miningLevel: 1,
+        miningSpeed: 2.0,
+        damage: 3,
+        canMine: {
+            'stone': true,
+            'ore': true,
+            'mineral': true,
+        }
+    }
+};
+
+// Конфигурация блоков (mining level, hardness, required tool)
+const BLOCKS_CONFIG = {
+    // Поверхностные блоки (s)
+    'grass':        { type: 'plant',   level: 0, hardness: 0.5, tool: 'hand' },
+    'beach_sand':   { type: 'sand',    level: 0, hardness: 0.3, tool: 'hand' },
+    'sand':         { type: 'sand',    level: 0, hardness: 0.3, tool: 'shovel' },
+    'clay':         { type: 'clay',    level: 0, hardness: 0.6, tool: 'shovel' },
+    'gravel':       { type: 'gravel',  level: 0, hardness: 0.7, tool: 'shovel' },
+    'desert_sand':  { type: 'sand',    level: 0, hardness: 0.3, tool: 'shovel' },
+    'stone':        { type: 'stone',   level: 1, hardness: 1.5, tool: 'pickaxe' },
+    'rock_peak':    { type: 'stone',   level: 2, hardness: 2.0, tool: 'pickaxe' },
+    'snow':         { type: 'plant',   level: 0, hardness: 0.2, tool: 'shovel' },
+    'snow_peak':    { type: 'stone',   level: 1, hardness: 1.0, tool: 'pickaxe' },
+    'deep_ocean':   { type: 'water',   level: 0, hardness: Infinity, tool: null },
+    'water':        { type: 'water',   level: 0, hardness: Infinity, tool: null },
+
+    // Грунтовые блоки (g) - под поверхностью
+    'dirt':         { type: 'dirt',    level: 0, hardness: 0.5, tool: 'shovel' },
+    'ocean':        { type: 'water',   level: 0, hardness: Infinity, tool: null },
+    'sand_ground':  { type: 'sand',    level: 0, hardness: 0.4, tool: 'shovel' },
+
+    // Объекты (e)
+    'tree':         { type: 'wood',    level: 0, hardness: 1.0, tool: 'axe' },
+    'jungle_tree':  { type: 'wood',    level: 0, hardness: 1.2, tool: 'axe' },
+    'pine':         { type: 'wood',    level: 0, hardness: 1.1, tool: 'axe' },
+    'cactus':       { type: 'plant',   level: 0, hardness: 0.8, tool: 'hand' },
+    'flower_red':   { type: 'plant',   level: 0, hardness: 0.1, tool: 'hand' },
+    'flower_yellow':{ type: 'plant',   level: 0, hardness: 0.1, tool: 'hand' },
+    'flower_white': { type: 'plant',   level: 0, hardness: 0.1, tool: 'hand' },
+    'stone_flower': { type: 'mineral', level: 1, hardness: 1.0, tool: 'pickaxe' },
+    'grass_detail': { type: 'plant',   level: 0, hardness: 0.1, tool: 'hand' },
+    'bush_cold':    { type: 'plant',   level: 0, hardness: 0.3, tool: 'hand' },
+    'sugar_cane':   { type: 'plant',   level: 0, hardness: 0.2, tool: 'hand' },
+
+    // Руда (o)
+    'ore_andesite':      { type: 'ore', level: 1, hardness: 2.0, tool: 'pickaxe' },
+    'ore_basalt':        { type: 'ore', level: 1, hardness: 2.2, tool: 'pickaxe' },
+    'ore_brown_limonite':{ type: 'ore', level: 1, hardness: 2.0, tool: 'pickaxe' },
+    'ore_yellow_limonite':{ type: 'ore', level: 1, hardness: 2.0, tool: 'pickaxe' },
+    'ore_malachite':     { type: 'ore', level: 1, hardness: 2.5, tool: 'pickaxe' },
+    'ore_copper':        { type: 'ore', level: 1, hardness: 2.0, tool: 'pickaxe' },
+    'ore_cassiterite':   { type: 'ore', level: 1, hardness: 2.3, tool: 'pickaxe' },
+    'ore_tin':           { type: 'ore', level: 1, hardness: 2.1, tool: 'pickaxe' },
+    'ore_bismuth':       { type: 'ore', level: 1, hardness: 2.4, tool: 'pickaxe' },
+};
+
+// Замените INFINITE_RESOURCES и INFINITE_BLOCKS на RESOURCE_CONFIG:
+const RESOURCE_CONFIG = {
+    // === БЕСКОНЕЧНЫЕ С ДРОПОМ (persistent) ===
+    'stone': {
+        finite: false,
+        drop: 1,
+        persistent: true  // Остается на карте после добычи
+    },
+
+    // === КОНЕЧНЫЕ (finite) ГРУНТОВЫЕ БЛОКИ ===
+    'dirt': { finite: true, drop: 1 },
+    'sand': { finite: true, drop: 1 },
+    'gravel': { finite: true, drop: 1 },
+    'clay': { finite: true, drop: 1 },
+    'beach_sand': { finite: true, drop: 1 },
+    'desert_sand': { finite: true, drop: 1 },
+    'snow': { finite: true, drop: 1 },
+
+    // Растения и цветы (1 блок)
+    'grass': { finite: true, drop: 1 },
+    'grass_detail': { finite: true, drop: 1 },
+    'flower_red': { finite: true, drop: 1 },
+    'flower_yellow': { finite: true, drop: 1 },
+    'flower_white': { finite: true, drop: 1 },
+    'cactus': { finite: true, drop: 1 },
+    'bush_cold': { finite: true, drop: 1 },
+    'sugar_cane': { finite: true, drop: 1 },
+    'stone_flower': { finite: true, drop: 1 },
+
+    // Деревья (3-5 блоков)
+    'tree': { finite: true, drop: 3 },
+    'jungle_tree': { finite: true, drop: 4 },
+    'pine': { finite: true, drop: 3 },
+
+    // Руда (1-2 блока)
+    'ore_andesite': { finite: true, drop: 1 },
+    'ore_basalt': { finite: true, drop: 1 },
+    'ore_brown_limonite': { finite: true, drop: 2 },
+    'ore_yellow_limonite': { finite: true, drop: 2 },
+    'ore_malachite': { finite: true, drop: 1 },
+    'ore_copper': { finite: true, drop: 1 },
+    'ore_cassiterite': { finite: true, drop: 1 },
+    'ore_tin': { finite: true, drop: 1 },
+    'ore_bismuth': { finite: true, drop: 1 },
+
+    // Декоративные блоки
+    'rock_peak': { finite: true, drop: 1 },
+    'snow_peak': { finite: true, drop: 1 },
+
+    // Вода и жидкости (нельзя добывать)
+    'water': { finite: false, drop: 0, unbreakable: true },
+    'deep_ocean': { finite: false, drop: 0, unbreakable: true },
+    'ocean': { finite: false, drop: 0, unbreakable: true },
+    'lake': { finite: false, drop: 0, unbreakable: true },
+};
+
+const playerInventory = {
+    tools: {
+        hand: { ...TOOLS_CONFIG.hand, durability: Infinity },
+        axe: { ...TOOLS_CONFIG.axe, durability: TOOLS_CONFIG.axe.durability },
+        shovel: { ...TOOLS_CONFIG.shovel, durability: TOOLS_CONFIG.shovel.durability },
+        pickaxe: { ...TOOLS_CONFIG.pickaxe, durability: TOOLS_CONFIG.pickaxe.durability }
+    },
+
+    currentTool: 'hand',
+
+    // Блоки в инвентаре
+    blocks: {},
+
+    // Предметы
+    items: {},
+
+    // Сменить инструмент
+    switchTool(toolId) {
+        if (this.tools[toolId]) {
+            this.currentTool = toolId;
+            console.log(`Инструмент изменен на: ${this.tools[toolId].name}`);
+            return true;
+        }
+        return false;
+    },
+
+    // Использовать инструмент (уменьшить прочность)
+    useTool() {
+        const tool = this.tools[this.currentTool];
+        if (tool.durability !== Infinity) {
+            tool.durability--;
+            if (tool.durability <= 0) {
+                console.log(`Инструмент ${tool.name} сломался!`);
+                // Возвращаемся к руке
+                this.currentTool = 'hand';
+            }
+        }
+    },
+
+    // Добавить блок в инвентарь
+    addBlock(blockType, count = 1) {
+        if (!this.blocks[blockType]) {
+            this.blocks[blockType] = 0;
+        }
+        this.blocks[blockType] = Math.min(this.blocks[blockType] + count, MAX_STACK);
+    },
+
+    // Получить текущий инструмент
+    getCurrentTool() {
+        return this.tools[this.currentTool];
+    },
+
+    // Проверить, может ли текущий инструмент добывать блок
+    canMineBlock(blockType) {
+        const tool = this.getCurrentTool();
+        const blockConfig = BLOCKS_CONFIG[blockType];
+
+        if (!blockConfig || !tool) return false;
+
+        // Проверяем уровень добычи
+        if (tool.miningLevel < blockConfig.level) {
+            console.log(`Слишком низкий уровень инструмента! Нужен уровень ${blockConfig.level}`);
+            return false;
+        }
+
+        // Проверяем тип инструмента
+        if (blockConfig.tool && blockConfig.tool !== tool.id) {
+            // Если блок требует конкретный инструмент, а у нас другой
+            if (blockConfig.tool === 'pickaxe' && tool.id !== 'pickaxe') return false;
+            if (blockConfig.tool === 'axe' && tool.id !== 'axe') return false;
+            if (blockConfig.tool === 'shovel' && tool.id !== 'shovel') return false;
+        }
+
+        // Проверяем по типу блока (canMine)
+        return tool.canMine[blockConfig.type] || false;
+    },
+
+    // Получить скорость добычи для блока
+    getMiningSpeed(blockType) {
+        const tool = this.getCurrentTool();
+        const blockConfig = BLOCKS_CONFIG[blockType];
+
+        if (!this.canMineBlock(blockType)) return 0;
+
+        // Базовая скорость добычи = скорость инструмента / твердость блока
+        return (tool.miningSpeed / blockConfig.hardness) * 100;
+    }
+};
 
 
+// === СИСТЕМА РАЗРУШЕНИЯ БЛОКОВ ===
+let miningMode = false;
+let miningTarget = null;
+let miningProgress = 0;
+let miningTimer = null;
+const MINING_RADIUS = 8;
+let showLayerLegend = false;
+
+// === СИСТЕМА МНОГОСЛОЙНОГО РЕНДЕРИНГА ===
+const LayerRenderer = {
+    // Получить все видимые слои для тайла
+    getVisibleLayers(tile, showPreview = false, previewLayer = null, prospectingMode = { ore: false, liquid: false }) {
+        const layers = [];
+
+        // 1. Биом (фон)
+        if (tile.b) {
+            layers.push({
+                type: 'biome',
+                value: tile.b,
+                visible: true,
+                priority: 0
+            });
+        }
+
+        // 2. Скальная порода (r) - бесконечный камень под всем
+        if (tile.r && tile.r !== 'none') {
+            layers.push({
+                type: 'rock',
+                value: tile.r,
+                visible: !tile.o && !tile.g && !tile.s, // Только если нет других слоев
+                priority: 1
+            });
+        }
+
+        // 3. Руда (o) - в скальной породе
+        if (tile.o && tile.o !== 'none') {
+            layers.push({
+                type: 'ore',
+                value: tile.o,
+                visible: (!tile.g && !tile.s) || showPreview,
+                priority: 2
+            });
+        }
+
+        // 4. Подпочва (p) - переходный слой между грунтом и скалой
+        if (tile.p && tile.p !== 'none') {
+            layers.push({
+                type: 'subsoil',
+                value: tile.p,
+                visible: !tile.g && !tile.s,
+                priority: 3
+            });
+        }
+
+        // 5. Грунт (g) - основной слой почвы
+        if (tile.g && tile.g !== 'none') {
+            layers.push({
+                type: 'ground',
+                value: tile.g,
+                visible: !tile.s || showPreview,
+                priority: 4
+            });
+        }
+
+        // 6. Поверхность (s) - верхний слой
+        if (tile.s && tile.s !== 'none') {
+            layers.push({
+                type: 'surface',
+                value: tile.s,
+                visible: true,
+                priority: 5
+            });
+        }
+
+        // 7. Объекты (e) - растения, деревья
+        if (tile.e && tile.e !== 'none') {
+            layers.push({
+                type: 'entity',
+                value: tile.e,
+                visible: true,
+                priority: 6
+            });
+        }
+
+        // 8. Жидкость (l) - поверх всего
+        if (tile.l && tile.l !== 'none') {
+            layers.push({
+                type: 'liquid',
+                value: tile.l,
+                amount: tile.la || 0,
+                max: tile.lm || 0,
+                visible: prospectingMode.liquid,
+                priority: 7
+            });
+        }
+
+        // Сортируем по приоритету
+        layers.sort((a, b) => a.priority - b.priority);
+
+        // Режим предпросмотра для добычи
+        if (showPreview && previewLayer) {
+            const previewIndex = layers.findIndex(l => l.type === previewLayer);
+            if (previewIndex > -1) {
+                layers[previewIndex].preview = true;
+
+                // Показываем следующий слой
+                if (previewIndex + 1 < layers.length) {
+                    layers[previewIndex + 1].visible = true;
+                    layers[previewIndex + 1].previewNext = true;
+                }
+            }
+        }
+
+        return layers.filter(layer => layer.visible !== false);
+    },
+
+    // Отрисовать тайл со всеми слоями
+    renderTileLayers(ctx, x, y, tile, tileSize, showPreview = false, previewLayer = null, prospectingMode = { ore: false, liquid: false }) {
+        const layers = this.getVisibleLayers(tile, showPreview, previewLayer, prospectingMode);
+
+        // Очищаем область
+        ctx.clearRect(x, y, tileSize, tileSize);
+
+        // Рисуем слои от нижнего к верхнему
+        layers.forEach(layer => {
+            this.renderLayer(ctx, x, y, layer, tileSize);
+        });
+    },
+
+    // Отрисовать один слой
+    renderLayer(ctx, x, y, layer, tileSize) {
+        const { type, value, preview = false, previewNext = false, amount, max } = layer;
+
+        let color = colors[value] || '#000';
+        let alpha = 1.0;
+
+        // Настройки для разных типов слоев
+        switch(type) {
+            case 'biome':
+                // Биом - фон, полупрозрачный
+                alpha = 0.3;
+                color = this.darkenColor(color, 0.5);
+                break;
+
+            case 'ground':
+                // Грунт - темнее обычного
+                color = this.darkenColor(color, 0.7);
+                if (preview) alpha = 0.4;
+                break;
+
+            case 'ore':
+                // Руда - текстурированная
+                color = colors[value] || '#FFD700';
+                if (preview) alpha = 0.5;
+                break;
+
+            case 'surface':
+                // Поверхность - обычный цвет
+                if (preview) alpha = 0.3;
+                break;
+
+            case 'entity':
+                // Объекты - особый рендеринг
+                this.renderEntity(ctx, x, y, tileSize, value, preview ? 0.3 : 1.0);
+                return; // Возвращаем, так как объект рисуется отдельно
+
+            case 'liquid':
+                // Жидкость - с прозрачностью
+                alpha = 0.6;
+                this.renderLiquid(ctx, x, y, tileSize, color, amount, max);
+                return;
+
+            case 'rock':
+                // Скальная порода - темный камень
+                color = this.darkenColor(color, 0.8);
+                if (preview) alpha = 0.4;
+                break;
+
+            case 'subsoil':
+                // Подпочва - смесь земли и камня
+                color = this.mixColors('#8B7355', color, 0.5); // Смешиваем землю и камень
+                if (preview) alpha = 0.4;
+                break;
+        }
+
+        // Применяем прозрачность
+        if (alpha !== 1.0) ctx.globalAlpha = alpha;
+
+        // Рисуем слой
+        ctx.fillStyle = color;
+        ctx.fillRect(x, y, tileSize, tileSize);
+
+        // Для руды добавляем текстуру
+        if (type === 'ore' && !preview) {
+            this.renderOreTexture(ctx, x, y, tileSize, color);
+        }
+
+        // Для previewNext добавляем подсветку
+        if (previewNext) {
+            ctx.strokeStyle = '#FFFF00';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(x + 1, y + 1, tileSize - 2, tileSize - 2);
+        }
+
+        // Восстанавливаем прозрачность
+        if (alpha !== 1.0) ctx.globalAlpha = 1.0;
+    },
+
+    // Рендер текстуры руды
+    renderOreTexture(ctx, x, y, size, color) {
+        ctx.fillStyle = this.lightenColor(color, 0.3);
+        const spots = 3 + Math.floor(Math.random() * 5);
+        for (let i = 0; i < spots; i++) {
+            const spotX = x + Math.random() * (size - 4);
+            const spotY = y + Math.random() * (size - 4);
+            const spotSize = 2 + Math.random() * 3;
+
+            ctx.beginPath();
+            ctx.arc(spotX, spotY, spotSize, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    },
+
+    // Рендер объекта
+    renderEntity(ctx, x, y, size, entityType, alpha = 1.0) {
+        ctx.globalAlpha = alpha;
+
+        const color = colors[entityType] || '#228B22';
+
+        if (entityType.includes('tree')) {
+            // Дерево
+            ctx.fillStyle = this.darkenColor(color, 0.3);
+            ctx.fillRect(x + size/2 - 3, y + size/4, 6, size/2);
+
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.ellipse(x + size/2, y + size/4, size/3, size/4, 0, 0, Math.PI * 2);
+            ctx.fill();
+        } else if (entityType.includes('flower')) {
+            // Цветок
+            ctx.fillStyle = color;
+            ctx.fillRect(x + size/2 - 4, y + size/2 - 4, 8, 8);
+        } else if (entityType === 'cactus') {
+            // Кактус
+            ctx.fillStyle = color;
+            ctx.fillRect(x + size/2 - 3, y + 4, 6, size - 8);
+        } else if (entityType === 'grass_detail') {
+            // Травинка
+            ctx.fillStyle = color;
+            ctx.fillRect(x + 4, y + 4, size - 8, 2);
+        } else {
+            // Остальные объекты
+            ctx.fillStyle = color;
+            ctx.fillRect(x + 2, y + 2, size - 4, size - 4);
+        }
+
+        ctx.globalAlpha = 1.0;
+    },
+
+    // Рендер жидкости
+    renderLiquid(ctx, x, y, size, color, amount = 0, max = 100) {
+        const fillHeight = (amount / max) * size;
+
+        // Фон
+        ctx.fillStyle = this.darkenColor(color, 0.7);
+        ctx.fillRect(x, y, size, size);
+
+        // Жидкость
+        ctx.fillStyle = color;
+        ctx.fillRect(x, y + size - fillHeight, size, fillHeight);
+    },
+
+    // Вспомогательные функции для работы с цветами
+    darkenColor(hex, factor) {
+        if (!hex || hex === 'none') return '#000';
+        if (!hex.startsWith('#')) return hex;
+
+        const r = Math.floor(parseInt(hex.slice(1,3), 16) * factor);
+        const g = Math.floor(parseInt(hex.slice(3,5), 16) * factor);
+        const b = Math.floor(parseInt(hex.slice(5,7), 16) * factor);
+
+        return `rgb(${r},${g},${b})`;
+    },
+
+    lightenColor(hex, factor) {
+        if (!hex || hex === 'none') return '#FFF';
+        if (!hex.startsWith('#')) return hex;
+
+        const r = Math.min(255, Math.floor(parseInt(hex.slice(1,3), 16) * (1 + factor)));
+        const g = Math.min(255, Math.floor(parseInt(hex.slice(3,5), 16) * (1 + factor)));
+        const b = Math.min(255, Math.floor(parseInt(hex.slice(5,7), 16) * (1 + factor)));
+
+        return `rgb(${r},${g},${b})`;
+    },
+    mixColors(color1, color2, ratio) {
+        // Конвертируем hex в rgb
+        const hexToRgb = (hex) => {
+            const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+            return result ? {
+                r: parseInt(result[1], 16),
+                g: parseInt(result[2], 16),
+                b: parseInt(result[3], 16)
+            } : null;
+        };
+
+        const rgb1 = hexToRgb(color1) || {r:0,g:0,b:0};
+        const rgb2 = hexToRgb(color2) || {r:0,g:0,b:0};
+
+        const r = Math.round(rgb1.r * ratio + rgb2.r * (1 - ratio));
+        const g = Math.round(rgb1.g * ratio + rgb2.g * (1 - ratio));
+        const b = Math.round(rgb1.b * ratio + rgb2.b * (1 - ratio));
+
+        return `rgb(${r},${g},${b})`;
+    }
+};
+
+
+// Функция для определения, какой слой разрушать
+function getBlockToMine(tile) {
+    // Приоритет разрушения:
+    // 1. Объекты (деревья, цветы)
+    // 2. Поверхность (трава, песок, камень)
+    // 3. Грунт (земля под поверхностью)
+    // 4. Руда
+
+    const tool = playerInventory.getCurrentTool();
+
+    // Если в руках кирка И есть руда - добываем руду
+    if (tool.id === 'pickaxe' && tile.o && tile.o !== 'none') {
+        return { type: tile.o, layer: 'o' };
+    }
+
+    // Если в руках топор И есть дерево - добываем дерево
+    if (tool.id === 'axe' && tile.e && tile.e !== 'none' &&
+        ['tree', 'jungle_tree', 'pine'].includes(tile.e)) {
+        return { type: tile.e, layer: 'e' };
+    }
+
+    // Если в руках лопата И есть земля/песок - добываем грунт
+    if (tool.id === 'shovel' && tile.g && tile.g !== 'none' &&
+        ['dirt', 'sand', 'sand_ground', 'clay', 'gravel'].includes(tile.g)) {
+        return { type: tile.g, layer: 'g' };
+    }
+
+    // Если в руках кирка И есть камень на поверхности
+    if (tool.id === 'pickaxe' && tile.s && tile.s !== 'none' &&
+        ['stone', 'rock_peak', 'snow_peak'].includes(tile.s)) {
+        return { type: tile.s, layer: 's' };
+    }
+
+    // Если в руках рука И есть цветы/трава - добываем их
+    if (tool.id === 'hand' && tile.e && tile.e !== 'none' &&
+        ['flower_red', 'flower_yellow', 'flower_white', 'grass_detail', 'cactus', 'bush_cold', 'sugar_cane'].includes(tile.e)) {
+        return { type: tile.e, layer: 'e' };
+    }
+
+    if (tile.e && tile.e !== 'none') {
+        return { type: tile.e, layer: 'e' };
+    } else if (tile.s && tile.s !== 'none') {
+        return { type: tile.s, layer: 's' };
+    } else if (tile.g && tile.g !== 'none') {
+        return { type: tile.g, layer: 'g' };
+    } else if (tile.o && tile.o !== 'none') {
+        return { type: tile.o, layer: 'o' };
+    }
+
+    return null;
+}
+
+// Проверка расстояния до блока
+function isBlockInRange(worldX, worldY) {
+    const distance = Math.sqrt(
+        Math.pow(player.x - worldX, 2) +
+        Math.pow(player.y - worldY, 2)
+    );
+    return distance <= MINING_RADIUS;
+}
+
+// Функция для перерисовки чанка
+function refreshChunk(chunk) {
+    if (chunk && chunk.canvas) {
+        const chunkCtx = chunk.canvas.getContext('2d');
+        chunkCtx.clearRect(0, 0, chunk.canvas.width, chunk.canvas.height);
+
+        // Рендерим с учетом режимов проспектинга
+        for (let y = 0; y < CHUNK_SIZE; y++) {
+            for (let x = 0; x < CHUNK_SIZE; x++) {
+                const tile = chunk.tiles[y][x];
+                const tx = x * baseTileSize;
+                const ty = y * baseTileSize;
+
+                LayerRenderer.renderTileLayers(
+                    chunkCtx,
+                    tx, ty,
+                    tile,
+                    baseTileSize,
+                    false, // showPreview
+                    null,  // previewLayer
+                    { ore: isOreProspecting, liquid: isLiquidProspecting }
+                );
+            }
+        }
+    }
+}
+
+// Начать добычу блока
+function startMining(tx, ty, chunk, tile, blockInfo) {
+    if (!isBlockInRange(tx + 0.5, ty + 0.5)) {
+        console.log('Слишком далеко! Максимальная дистанция: ' + MINING_RADIUS);
+        return;
+    }
+
+    //проверку на неразрушаемые блоки
+    if (!playerInventory.canMineBlock(blockInfo.type)) {
+        console.log('Нельзя добыть этот блок текущим инструментом!');
+
+        // Проверяем, является ли блок неразрушаемым
+        const resourceConfig = RESOURCE_CONFIG[blockInfo.type];
+        if (resourceConfig && resourceConfig.unbreakable) {
+            console.log('Этот блок нельзя разрушить!');
+        }
+        return;
+    }
+
+    miningTarget = {
+        tx, ty,
+        chunkData: chunk, // Теперь передаем весь объект чанка
+        tile: tile,
+        blockInfo: blockInfo,
+        startTime: Date.now()
+    };
+
+    miningMode = true;
+    const miningSpeed = playerInventory.getMiningSpeed(blockInfo.type);
+
+    // Рассчитываем время добычи (в мс)
+    const miningTime = (1000 / miningSpeed) * 1000;
+
+    console.log(`Начата добыча ${blockInfo.type}, время: ${(miningTime/1000).toFixed(2)}с`);
+
+    // Перерисовываем чанк с предпросмотром
+    refreshChunk(chunk);
+
+    // Запускаем таймер добычи
+    miningTimer = setTimeout(() => {
+        finishMining();
+    }, miningTime);
+
+    // Запускаем анимацию прогресса
+    miningProgress = 0;
+    const progressInterval = setInterval(() => {
+        miningProgress += 100 / (miningTime / 100);
+        if (miningProgress >= 100 || !miningMode) {
+            clearInterval(progressInterval);
+        }
+    }, 100);
+}
+
+// функцию для определения бесконечного блока по биому
+function getInfiniteBlockForBiome(biome) {
+    switch(biome) {
+        case 'beach':
+        case 'coast':
+            return 'sand';
+        case 'desert':
+            return 'desert_sand';
+        case 'tundra':
+            return 'snow';
+        case 'mountain':
+        case 'peak':
+            return 'stone';
+        case 'ocean':
+        case 'deep_ocean':
+            return 'sand'; // Дно океана - песок
+        case 'forest':
+        case 'savanna':
+        case 'jungle':
+        default:
+            return 'dirt';
+    }
+}
+
+// Завершить добычу
+function finishMining() {
+    if (!miningTarget) return;
+
+    const { tx, ty, chunkData, tile, blockInfo } = miningTarget;
+    const resourceConfig = RESOURCE_CONFIG[blockInfo.type] || {
+        finite: false,
+        drop: 0,
+        persistent: false
+    };
+
+    // Проверяем, является ли блок неразрушаемым
+    if (resourceConfig.unbreakable) {
+        console.log('Этот блок нельзя разрушить!');
+        cancelMining();
+        return;
+    }
+
+    // === ОСОБЫЙ СЛУЧАЙ: ПЕРСИСТЕНТНЫЕ БЛОКИ (камень) ===
+    if (resourceConfig.persistent) {
+        // Блок остается на карте, просто даем дроп
+        // Ничего не меняем в слоях тайла
+
+    } else {
+        // Обычная логика замены слоя
+        switch(blockInfo.layer) {
+            case 'e':
+                tile.e = 'none';
+                break;
+
+            case 's':
+                if (tile.g && tile.g !== 'none') {
+                    tile.s = tile.g;
+                    tile.g = 'none';
+                } else if (tile.p && tile.p !== 'none') {
+                    tile.s = tile.p;
+                    tile.p = 'none';
+                } else if (tile.o && tile.o !== 'none') {
+                    tile.s = tile.o;
+                    tile.o = 'none';
+                } else {
+                    // Достигли скальной породы
+                    tile.s = tile.r || 'stone';
+                }
+                break;
+
+            case 'g':
+                if (tile.p && tile.p !== 'none') {
+                    tile.s = tile.p;
+                    tile.p = 'none';
+                } else if (tile.o && tile.o !== 'none') {
+                    tile.s = tile.o;
+                    tile.o = 'none';
+                } else {
+                    tile.s = tile.r || 'stone';
+                }
+                tile.g = 'none';
+                break;
+
+            case 'p':
+                if (tile.o && tile.o !== 'none') {
+                    tile.s = tile.o;
+                    tile.o = 'none';
+                } else {
+                    tile.s = tile.r || 'stone';
+                }
+                tile.p = 'none';
+                break;
+
+            case 'o':
+                tile.o = 'none';
+                tile.s = tile.r || 'stone';
+                break;
+        }
+    }
+
+    // Добавляем добытый блок в инвентарь (если есть дроп)
+    if (resourceConfig.drop > 0) {
+        playerInventory.addBlock(blockInfo.type, resourceConfig.drop);
+        console.log(`Добавлено в инвентарь: ${resourceConfig.drop} ${blockInfo.type}`);
+    }
+
+    // Используем инструмент
+    playerInventory.useTool();
+
+    // Перерисовываем чанк
+    refreshChunk(chunkData);
+
+    console.log(`Добыт блок: ${blockInfo.type}${resourceConfig.persistent ? ' (остается на карте)' : ''}`);
+
+    // Сбрасываем состояние добычи
+    miningMode = false;
+    miningTarget = null;
+    miningProgress = 0;
+    if (miningTimer) {
+        clearTimeout(miningTimer);
+        miningTimer = null;
+    }
+}
+
+// Отменить добычу
+function cancelMining() {
+    if (miningTimer) {
+        clearTimeout(miningTimer);
+        miningTimer = null;
+    }
+    miningMode = false;
+    miningTarget = null;
+    miningProgress = 0;
+}
+
+// Обработчик клика для добычи
+let shiftKeyPressed = false;
+
+window.addEventListener('keydown', (e) => {
+    if (e.key === 'Shift') shiftKeyPressed = true;
+});
+
+window.addEventListener('keyup', (e) => {
+    if (e.key === 'Shift') shiftKeyPressed = false;
+});
+
+
+//Меню выбора слоя
+function showLayerSelectionMenu(tx, ty, tile, chunk) {
+    const layers = [];
+
+    // Собираем все доступные слои
+    if (tile.e && tile.e !== 'none') {
+        layers.push({ type: tile.e, layer: 'e', name: getLayerName('e') });
+    }
+    if (tile.s && tile.s !== 'none') {
+        layers.push({ type: tile.s, layer: 's', name: getLayerName('s') });
+    }
+    if (tile.g && tile.g !== 'none') {
+        layers.push({ type: tile.g, layer: 'g', name: getLayerName('g') });
+    }
+    if (tile.o && tile.o !== 'none') {
+        layers.push({ type: tile.o, layer: 'o', name: getLayerName('o') });
+    }
+
+    if (layers.length === 0) {
+        console.log('Нет доступных слоев для добычи');
+        return;
+    }
+
+    // Показываем меню (можно сделать как всплывающее окно или консольный вывод)
+    console.log('Доступные слои для добычи:');
+    layers.forEach((layer, index) => {
+        console.log(`${index + 1}. ${layer.name}: ${layer.type}`);
+    });
+
+    // Можно добавить реальное меню в UI, но пока просто выбираем первый подходящий слой
+    const tool = playerInventory.getCurrentTool();
+    let selectedLayer = null;
+
+    // Ищем слой, который можно добыть текущим инструментом
+    for (const layer of layers) {
+        if (playerInventory.canMineBlock(layer.type)) {
+            selectedLayer = layer;
+            break;
+        }
+    }
+
+    if (selectedLayer) {
+        console.log(`Выбран слой: ${selectedLayer.name} (${selectedLayer.type})`);
+        startMining(tx, ty, chunk, tile, selectedLayer);
+    } else {
+        console.log('Нет слоев, которые можно добыть текущим инструментом');
+    }
+}
+
+// Обновленная функция для клика
+canvas.addEventListener('click', (e) => {
+    if (miningMode) {
+        cancelMining();
+        return;
+    }
+
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const worldX = (x + camera.x) / tileSize;
+    const worldY = (y + camera.y) / tileSize;
+    const tx = Math.floor(worldX);
+    const ty = Math.floor(worldY);
+
+    // Получаем чанк и тайл
+    const cx = Math.floor(tx / CHUNK_SIZE);
+    const cy = Math.floor(ty / CHUNK_SIZE);
+    const key = `${cx},${cy}`;
+    const chunk = chunkCache.get(key);
+
+    if (!chunk || !chunk.tiles) return;
+
+    const lx = ((tx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    const ly = ((ty % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    const tile = chunk.tiles[ly][lx];
+
+    // Если зажат Shift - показываем меню выбора слоя
+    if (shiftKeyPressed) {
+        showLayerSelectionMenu(tx, ty, tile, chunk);
+        return;
+    }
+
+    // Определяем, какой блок добывать (с учетом инструмента)
+    const blockInfo = getBlockToMine(tile);
+    if (!blockInfo) {
+        console.log('Здесь нечего добывать');
+        return;
+    }
+
+    startMining(tx, ty, chunk, tile, blockInfo);
+});
+
+// Добавим обработку движения для отмены добычи
+window.addEventListener('keydown', (e) => {
+    if (miningMode && (keys['a'] || keys['d'] || keys['w'] || keys['s'])) {
+        cancelMining();
+    }
+});
+
+// Рендер прогресса добычи
+function renderMiningProgress() {
+    if (!miningMode || miningProgress <= 0) return;
+
+    if (miningTarget) {
+        const { tx, ty } = miningTarget;
+        const screenX = tx * tileSize - camera.x;
+        const screenY = ty * tileSize - camera.y;
+
+        // Фон прогресса
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        ctx.fillRect(screenX, screenY - 10, tileSize, 5);
+
+        // Полоса прогресса
+        ctx.fillStyle = miningProgress < 100 ? '#4CAF50' : '#FF5722';
+        ctx.fillRect(screenX, screenY - 10, (tileSize * miningProgress) / 100, 5);
+
+        // Текст прогресса
+        ctx.fillStyle = '#FFF';
+        ctx.font = '10px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText(
+            `${Math.round(miningProgress)}%`,
+            screenX + tileSize / 2,
+            screenY - 12
+        );
+    }
+}
+
+// Функция для определения, что будет добыто и что останется
+function getMiningPreview(tile) {
+    const tool = playerInventory.getCurrentTool();
+    const preview = {
+        canMine: false,
+        currentLayer: null,
+        nextLayer: null,
+        resourceCount: 0,
+        highlightColor: HIGHLIGHT_COLORS.cannot_mine,
+        willRemain: null
+    };
+
+    // Определяем доступные слои для инструмента
+    const availableLayers = [];
+
+    if (tool.id === 'pickaxe') {
+        // Кирка: руда -> подпочва -> скала
+        if (tile.o && tile.o !== 'none') availableLayers.push({ type: tile.o, layer: 'o' });
+        if (tile.p && tile.p !== 'none') availableLayers.push({ type: tile.p, layer: 'p' });
+        if (tile.s && ['stone', 'rock_peak', 'snow_peak'].includes(tile.s))
+            availableLayers.push({ type: tile.s, layer: 's' });
+    } else if (tool.id === 'shovel') {
+        // Лопата: грунт -> подпочва
+        if (tile.g && tile.g !== 'none') availableLayers.push({ type: tile.g, layer: 'g' });
+        if (tile.p && tile.p !== 'none') availableLayers.push({ type: tile.p, layer: 'p' });
+        if (tile.s && ['dirt', 'sand', 'gravel', 'clay'].includes(tile.s))
+            availableLayers.push({ type: tile.s, layer: 's' });
+    } else if (tool.id === 'axe') {
+        // Топор: деревья
+        if (tile.e && ['tree', 'jungle_tree', 'pine'].includes(tile.e))
+            availableLayers.push({ type: tile.e, layer: 'e' });
+    } else if (tool.id === 'hand') {
+        // Рука: растения, трава
+        if (tile.e && ['flower_red', 'flower_yellow', 'flower_white',
+            'grass_detail', 'cactus', 'bush_cold', 'sugar_cane',
+            'stone_flower'].includes(tile.e))
+            availableLayers.push({ type: tile.e, layer: 'e' });
+        if (tile.s && ['grass', 'beach_sand'].includes(tile.s))
+            availableLayers.push({ type: tile.s, layer: 's' });
+    }
+
+    // Выбираем верхний доступный слой
+    if (availableLayers.length > 0) {
+        const layer = availableLayers[0];
+        const resourceConfig = RESOURCE_CONFIG[layer.type] || { finite: false, drop: 0 };
+
+        preview.currentLayer = layer;
+        preview.resourceCount = resourceConfig.drop;
+        preview.canMine = playerInventory.canMineBlock(layer.type);
+
+        // Определяем, что останется
+        switch(layer.layer) {
+            case 'e':
+                preview.willRemain = 'ничего';
+                preview.highlightColor = HIGHLIGHT_COLORS.entity;
+                break;
+            case 's':
+                if (tile.g && tile.g !== 'none') {
+                    preview.nextLayer = { type: tile.g, layer: 's' };
+                    preview.willRemain = tile.g;
+                } else if (tile.p && tile.p !== 'none') {
+                    preview.nextLayer = { type: tile.p, layer: 's' };
+                    preview.willRemain = 'подпочва';
+                } else {
+                    preview.nextLayer = { type: 'stone', layer: 's' };
+                    preview.willRemain = 'скала';
+                }
+                preview.highlightColor = HIGHLIGHT_COLORS.surface;
+                break;
+            case 'g':
+                if (tile.p && tile.p !== 'none') {
+                    preview.nextLayer = { type: tile.p, layer: 's' };
+                    preview.willRemain = 'подпочва';
+                } else if (tile.o && tile.o !== 'none') {
+                    preview.nextLayer = { type: tile.o, layer: 's' };
+                    preview.willRemain = 'руда';
+                } else {
+                    preview.nextLayer = { type: 'stone', layer: 's' };
+                    preview.willRemain = 'скала';
+                }
+                preview.highlightColor = HIGHLIGHT_COLORS.ground;
+                break;
+            case 'p':
+                if (tile.o && tile.o !== 'none') {
+                    preview.nextLayer = { type: tile.o, layer: 's' };
+                    preview.willRemain = 'руда';
+                } else {
+                    preview.nextLayer = { type: 'stone', layer: 's' };
+                    preview.willRemain = 'скала';
+                }
+                preview.highlightColor = HIGHLIGHT_COLORS.stone;
+                break;
+            case 'o':
+                preview.nextLayer = { type: 'stone', layer: 's' };
+                preview.willRemain = 'скала';
+                preview.highlightColor = HIGHLIGHT_COLORS.ore;
+                break;
+        }
+    }
+
+    return preview;
+}
+
+// Функция для отображения предпросмотра добычи
+function renderMiningPreview() {
+    if (mouseX < 0 || mouseY < 0 || mouseX >= canvas.width || mouseY >= canvas.height) return;
+
+    const worldX = (mouseX + camera.x) / tileSize;
+    const worldY = (mouseY + camera.y) / tileSize;
+    const tx = Math.floor(worldX);
+    const ty = Math.floor(worldY);
+
+    // Проверяем расстояние
+    if (!isBlockInRange(tx + 0.5, ty + 0.5)) return;
+
+    const tile = getTileAt(tx, ty);
+    if (!tile) return;
+
+    const preview = getMiningPreview(tile);
+    if (!preview.currentLayer) return;
+
+    const screenX = tx * tileSize - camera.x;
+    const screenY = ty * tileSize - camera.y;
+
+    // Подсветка текущего слоя
+    ctx.fillStyle = preview.highlightColor;
+    ctx.fillRect(screenX, screenY, tileSize, tileSize);
+
+    // Если есть следующий слой - показываем его в центре
+    if (preview.nextLayer) {
+        ctx.fillStyle = colors[preview.nextLayer.type] || '#888888';
+        ctx.globalAlpha = 0.7;
+        ctx.fillRect(screenX + tileSize/4, screenY + tileSize/4, tileSize/2, tileSize/2);
+        ctx.globalAlpha = 1.0;
+
+        // Обводка для наглядности
+        ctx.strokeStyle = '#FFFFFF';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(screenX + tileSize/4 - 1, screenY + tileSize/4 - 1,
+            tileSize/2 + 2, tileSize/2 + 2);
+    }
+
+    // Если нельзя добыть - показываем красный крестик
+    if (!preview.canMine) {
+        ctx.strokeStyle = '#FF0000';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(screenX + 5, screenY + 5);
+        ctx.lineTo(screenX + tileSize - 5, screenY + tileSize - 5);
+        ctx.moveTo(screenX + tileSize - 5, screenY + 5);
+        ctx.lineTo(screenX + 5, screenY + tileSize - 5);
+        ctx.stroke();
+    }
+}
+
+// Легенда слоев
+function renderLayerLegend() {
+    const legendX = canvas.width - 250;
+    const legendY = 120;
+
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.9)';
+    ctx.fillRect(legendX, legendY, 230, 200);
+
+    ctx.fillStyle = '#FFF';
+    ctx.font = '16px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('Легенда слоев', legendX + 115, legendY + 25);
+
+    // Слои
+    const layers = [
+        { layer: 's', color: '#00FF00', name: 'Поверхность', desc: 'Трава, песок, камень' },
+        { layer: 'g', color: '#8B7355', name: 'Грунт', desc: 'Земля под поверхностью' },
+        { layer: 'o', color: '#FFD700', name: 'Руда', desc: 'Полезные ископаемые' },
+        { layer: 'e', color: '#228B22', name: 'Объекты', desc: 'Деревья, растения' },
+        { layer: 'l', color: '#0000FF', name: 'Жидкость', desc: 'Нефть, вода' }
+    ];
+
+    let yOffset = 45;
+    layers.forEach(item => {
+        // Цветной квадрат
+        ctx.fillStyle = item.color;
+        ctx.fillRect(legendX + 10, legendY + yOffset, 12, 12);
+
+        // Текст
+        ctx.fillStyle = '#FFF';
+        ctx.font = '12px Arial';
+        ctx.textAlign = 'left';
+        ctx.fillText(item.name, legendX + 30, legendY + yOffset + 10);
+        ctx.fillText(item.desc, legendX + 30, legendY + yOffset + 25);
+
+        yOffset += 35;
+    });
+}
+
+// Функция для получения имени слоя
+function getLayerName(layer) {
+    const names = {
+        'e': 'Объект',
+        's': 'Поверхность',
+        'g': 'Грунт',
+        'o': 'Руда',
+        'l': 'Жидкость'
+    };
+    return names[layer] || layer;
+}
+
+// === УЛУЧШЕННЫЙ UI ===
+function renderEnhancedUI() {
+    const tool = playerInventory.getCurrentTool();
+
+    // Панель инструментов
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+    ctx.fillRect(10, canvas.height - 150, 280, 140);
+
+    // Текущий инструмент
+    ctx.fillStyle = '#FFF';
+    ctx.font = '16px Arial';
+    ctx.textAlign = 'left';
+    ctx.fillText(`Инструмент: ${tool.name}`, 20, canvas.height - 130);
+
+    // Уровень добычи
+    ctx.fillText(`Уровень: ${tool.miningLevel}`, 20, canvas.height - 110);
+
+    // Прочность
+    if (tool.durability === Infinity) {
+        ctx.fillText('Прочность: ∞', 20, canvas.height - 90);
+    } else {
+        ctx.fillText(`Прочность: ${tool.durability}/${TOOLS_CONFIG[tool.id].durability}`, 20, canvas.height - 90);
+
+        // Полоса прочности
+        const durabilityPercent = (tool.durability / TOOLS_CONFIG[tool.id].durability) * 100;
+        ctx.fillStyle = durabilityPercent > 50 ? '#4CAF50' :
+            durabilityPercent > 20 ? '#FF9800' : '#F44336';
+        ctx.fillRect(20, canvas.height - 80, 200 * (durabilityPercent / 100), 8);
+    }
+
+    // Информация о добываемом блоке
+    if (miningTarget) {
+        ctx.fillStyle = 'rgba(50, 50, 150, 0.8)';
+        ctx.fillRect(canvas.width - 220, 20, 200, 80);
+
+        ctx.fillStyle = '#FFF';
+        ctx.font = '14px Arial';
+        ctx.textAlign = 'left';
+        ctx.fillText(`Добыча: ${miningTarget.blockInfo.type}`, canvas.width - 210, 40);
+        ctx.fillText(`Слой: ${getLayerName(miningTarget.blockInfo.layer)}`, canvas.width - 210, 60);
+        ctx.fillText(`Прогресс: ${Math.round(miningProgress)}%`, canvas.width - 210, 80);
+
+        // Полоса прогресса
+        ctx.fillStyle = '#2196F3';
+        ctx.fillRect(canvas.width - 210, 90, 180 * (miningProgress / 100), 5);
+    }
+
+    // Предпросмотр добычи (под курсором)
+    if (mouseX >= 0 && mouseY >= 0 && mouseX < canvas.width && mouseY < canvas.height) {
+        const worldX = (mouseX + camera.x) / tileSize;
+        const worldY = (mouseY + camera.y) / tileSize;
+        const tx = Math.floor(worldX);
+        const ty = Math.floor(worldY);
+
+        if (isBlockInRange(tx + 0.5, ty + 0.5)) {
+            const tile = getTileAt(tx, ty);
+            if (tile) {
+                const preview = getMiningPreview(tile);
+
+                if (preview.currentLayer) {
+                    // Панель предпросмотра
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+                    const previewHeight = 100;
+                    ctx.fillRect(mouseX + 20, mouseY + 20, 220, previewHeight);
+
+                    ctx.fillStyle = '#FFF';
+                    ctx.font = '12px Arial';
+                    ctx.textAlign = 'left';
+
+                    // Текущий слой
+                    ctx.fillText(`Добыть: ${preview.currentLayer.type}`, mouseX + 30, mouseY + 40);
+
+                    // Количество ресурсов
+                    if (preview.resourceCount > 0) {
+                        ctx.fillStyle = '#4CAF50';
+
+                        // Для персистентных блоков добавляем специальную пометку
+                        const resourceConfig = RESOURCE_CONFIG[preview.currentLayer?.type] || {};
+                        if (resourceConfig.persistent) {
+                            ctx.fillText(`Ресурсов: ${preview.resourceCount} (остается на карте)`, mouseX + 30, mouseY + 60);
+                        } else if (resourceConfig.finite === false) {
+                            ctx.fillText(`Ресурсов: ∞ (бесконечный)`, mouseX + 30, mouseY + 60);
+                        } else {
+                            ctx.fillText(`Ресурсов: ${preview.resourceCount}`, mouseX + 30, mouseY + 60);
+                        }
+                    } else {
+                        ctx.fillStyle = '#888';
+                        ctx.fillText(`Ресурсов: 0`, mouseX + 30, mouseY + 60);
+                    }
+
+                    // Что останется
+                    if (preview.willRemain) {
+                        ctx.fillStyle = '#FF9800';
+                        ctx.fillText(`Останется: ${preview.willRemain}`, mouseX + 30, mouseY + 80);
+                    }
+
+                    // Статус добычи
+                    ctx.fillStyle = preview.canMine ? '#4CAF50' : '#F44336';
+                    ctx.fillText(preview.canMine ? '✓ Можно добыть' : '✗ Нельзя добыть',
+                        mouseX + 30, mouseY + previewHeight);
+                }
+            }
+        }
+    }
+
+    // Информация о блоке под курсором (при наведении)
+    if (mouseX >= 0 && mouseY >= 0 && mouseX < canvas.width && mouseY < canvas.height) {
+        const worldX = (mouseX + camera.x) / tileSize;
+        const worldY = (mouseY + camera.y) / tileSize;
+        const hoverTile = getTileAt(Math.floor(worldX), Math.floor(worldY));
+
+        if (hoverTile) {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+            ctx.fillRect(mouseX + 10, mouseY - 50, 150, 40);
+            ctx.fillStyle = '#FFF';
+            ctx.font = '12px Arial';
+            ctx.textAlign = 'left';
+
+            // Показываем информацию о всех слоях в этой клетке
+            let yOffset = 0;
+            let layersText = [];
+
+            if (hoverTile.e && hoverTile.e !== 'none') {
+                layersText.push(`Объект: ${hoverTile.e}`);
+            }
+            if (hoverTile.s && hoverTile.s !== 'none') {
+                layersText.push(`Поверхность: ${hoverTile.s}`);
+            }
+            if (hoverTile.g && hoverTile.g !== 'none') {
+                layersText.push(`Грунт: ${hoverTile.g}`);
+            }
+            if (hoverTile.o && hoverTile.o !== 'none') {
+                layersText.push(`Руда: ${hoverTile.o}`);
+            }
+            if (hoverTile.l && hoverTile.l !== 'none' && isLiquidProspecting) {
+                layersText.push(`Жидкость: ${hoverTile.l} (${hoverTile.la || 0}/${hoverTile.lm || 0}L)`);
+            }
+
+            // Отображаем не более 3 слоев, чтобы не перекрывать экран
+            const displayLayers = layersText.slice(0, 3);
+            displayLayers.forEach((text, index) => {
+                ctx.fillText(text, mouseX + 15, mouseY - 30 + (index * 15));
+            });
+
+            if (layersText.length > 3) {
+                ctx.fillText(`... и еще ${layersText.length - 3}`, mouseX + 15, mouseY - 30 + (3 * 15));
+            }
+        }
+    }
+
+
+
+    // Легенда слоев
+    if (showLayerLegend) {
+        renderLayerLegend();
+    }
+
+    // Подсказки управления
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+    ctx.font = '12px Arial';
+    ctx.fillText('1-Рука 2-Топор 3-Лопата 4-Кирка', 20, canvas.height - 60);
+    ctx.fillText('L - Легенда слоев  C - Камера  G - Сетка', 20, canvas.height - 45);
+    ctx.fillText('P - Поиск руды  R - Регенерация', 20, canvas.height - 30);
+}
+
+// Переключение инструментов
+window.addEventListener('keydown', (e) => {
+    if (e.key === '1') playerInventory.switchTool('hand');
+    if (e.key === '2') playerInventory.switchTool('axe');
+    if (e.key === '3') playerInventory.switchTool('shovel');
+    if (e.key === '4') playerInventory.switchTool('pickaxe');
+
+    // Отмена добычи при смене инструмента
+    if (miningMode && (e.key === '1' || e.key === '2' || e.key === '3' || e.key === '4')) {
+        cancelMining();
+    }
+});
 
 // Chunk management
 const CHUNK_SIZE = 16;
@@ -367,18 +1803,24 @@ let isLiquidProspecting = false;
 let showGrid = false;
 
 // Вспомогательная функция для создания холста чанка
-function createChunkObject(tiles) {
+function createChunkObject(tiles, cx, cy) {
     const c = document.createElement('canvas');
     c.width = CHUNK_SIZE * baseTileSize;
     c.height = CHUNK_SIZE * baseTileSize;
     const chunkCtx = c.getContext('2d');
+
+    // Сохраняем координаты чанка
+    chunkCtx.chunkX = cx;
+    chunkCtx.chunkY = cy;
 
     renderTilesToCanvas(tiles, chunkCtx);
 
     return {
         canvas: c,
         tiles: tiles,
-        loadedAt: performance.now() // Для плавного появления
+        loadedAt: performance.now(),
+        cx: cx,
+        cy: cy
     };
 }
 
@@ -407,7 +1849,8 @@ async function fetchBatch(batch) {
         const data = await res.json();
 
         for (const [key, tiles] of Object.entries(data)) {
-            chunkCache.set(key, createChunkObject(tiles));
+            const [cx, cy] = key.split(',').map(Number);
+            chunkCache.set(key, createChunkObject(tiles, cx, cy));
             loadingChunks.delete(key);
         }
     } catch (e) {
@@ -545,9 +1988,109 @@ function renderPlayer() {
     }
 }
 
+// Функция для отрисовки подсветки блоков в радиусе
+function renderRadiusHighlight() {
+    if (!highlightRadius) return;
 
+    const playerX = Math.floor(player.x);
+    const playerY = Math.floor(player.y);
+    const tool = playerInventory.getCurrentTool();
+
+    // Перебираем все тайлы в радиусе MINING_RADIUS
+    for (let dx = -MINING_RADIUS; dx <= MINING_RADIUS; dx++) {
+        for (let dy = -MINING_RADIUS; dy <= MINING_RADIUS; dy++) {
+            const tx = playerX + dx;
+            const ty = playerY + dy;
+
+            // Проверяем расстояние
+            const distance = Math.sqrt(dx*dx + dy*dy);
+            if (distance > MINING_RADIUS) continue;
+
+            const tile = getTileAt(tx, ty);
+            if (!tile) continue;
+
+            const preview = getMiningPreview(tile);
+            if (!preview.canMine || !preview.currentLayer) continue;
+
+            const screenX = tx * tileSize - camera.x;
+            const screenY = ty * tileSize - camera.y;
+
+            // Подсветка в зависимости от инструмента
+            let highlightColor = 'rgba(255, 255, 255, 0.1)'; // По умолчанию прозрачная
+
+            switch(tool.id) {
+                case 'pickaxe':
+                    // Кирка: подсвечиваем руду и камень
+                    if (tile.o && tile.o !== 'none') {
+                        highlightColor = 'rgba(255, 215, 0, 0.3)'; // Золотой для руды
+                    } else if (tile.s && ['stone', 'rock_peak', 'snow_peak'].includes(tile.s)) {
+                        highlightColor = 'rgba(128, 128, 128, 0.2)'; // Серый для камня
+                    }
+                    break;
+
+                case 'shovel':
+                    // Лопата: подсвечиваем землю, песок, глину, гравий
+                    if (tile.g && ['dirt', 'sand', 'sand_ground', 'clay', 'gravel'].includes(tile.g)) {
+                        highlightColor = 'rgba(139, 69, 19, 0.3)'; // Коричневый для земли
+                    } else if (tile.s && ['dirt', 'sand', 'gravel', 'clay'].includes(tile.s)) {
+                        highlightColor = 'rgba(139, 69, 19, 0.2)'; // Светло-коричневый
+                    }
+                    break;
+
+                case 'axe':
+                    // Топор: подсвечиваем деревья
+                    if (tile.e && ['tree', 'jungle_tree', 'pine'].includes(tile.e)) {
+                        highlightColor = 'rgba(0, 255, 0, 0.3)'; // Зеленый для деревьев
+                    }
+                    break;
+
+                case 'hand':
+                    // Рука: подсвечиваем растения и цветы
+                    if (tile.e && ['flower_red', 'flower_yellow', 'flower_white',
+                        'grass_detail', 'cactus', 'bush_cold', 'sugar_cane',
+                        'stone_flower'].includes(tile.e)) {
+                        highlightColor = 'rgba(0, 255, 0, 0.2)'; // Светло-зеленый
+                    } else if (tile.s && ['grass', 'beach_sand'].includes(tile.s)) {
+                        highlightColor = 'rgba(255, 255, 0, 0.2)'; // Желтый для травы
+                    }
+                    break;
+            }
+
+            // Рисуем подсветку
+            ctx.fillStyle = highlightColor;
+            ctx.fillRect(screenX, screenY, tileSize, tileSize);
+
+            // Рисуем обводку радиуса
+            if (distance === Math.floor(MINING_RADIUS)) {
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+                ctx.lineWidth = 1;
+                ctx.strokeRect(screenX, screenY, tileSize, tileSize);
+            }
+        }
+    }
+}
+
+//Показ инвентаря
+function renderInventory() {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+    ctx.fillRect(canvas.width - 250, 20, 230, 200);
+
+    ctx.fillStyle = '#FFF';
+    ctx.font = '16px Arial';
+    ctx.fillText('Инвентарь', canvas.width - 240, 40);
+
+    let y = 60;
+    for (const [block, count] of Object.entries(playerInventory.blocks)) {
+        if (count > 0) {
+            ctx.fillText(`${block}: ${count}`, canvas.width - 240, y);
+            y += 20;
+        }
+    }
+}
 
 const colors = {
+    'void': '#1a1a2e',
+
     // ===== ВОДА =====
     'deep_ocean': '#000b1a',     // очень тёмный синий
     'water': '#0077be',          // океан
@@ -560,6 +2103,7 @@ const colors = {
     'gravel': '#8d8d8d',         // гравий (зернистый серый)
     'beach': '#f0e68c',     // песчаный океанский берег
     'coast': '#e6d8a3',     // если вдруг начнёшь рисовать b
+    'dirt': '#8B7355',
 
 
     // ===== РАСТИТЕЛЬНОСТЬ =====
@@ -616,7 +2160,18 @@ const colors = {
     'oil': '#260f00',            // Средний коричневый (обычная нефть)
 };
 
+//Подсветка разных слоев при добыче
+const HIGHLIGHT_COLORS = {
+    'surface': 'rgba(255, 255, 0, 0.3)',      // желтый для поверхности
+    'ground': 'rgba(139, 69, 19, 0.3)',       // коричневый для земли
+    'ore': 'rgba(255, 215, 0, 0.3)',          // золотой для руды
+    'entity': 'rgba(0, 255, 0, 0.3)',         // зеленый для объектов
+    'stone': 'rgba(128, 128, 128, 0.3)',      // серый для камня
+    'cannot_mine': 'rgba(255, 0, 0, 0.2)'     // красный для недоступных
+};
 
+
+// === ОБНОВЛЕННАЯ ФУНКЦИЯ РЕНДЕРА ТАЙЛОВ ===
 function renderTilesToCanvas(tiles, chunkCtx) {
     for (let y = 0; y < CHUNK_SIZE; y++) {
         for (let x = 0; x < CHUNK_SIZE; x++) {
@@ -624,89 +2179,67 @@ function renderTilesToCanvas(tiles, chunkCtx) {
             const tx = x * baseTileSize;
             const ty = y * baseTileSize;
 
-            // 1. ПОЧВА (с градиентом для гор)
-            if (tile.b === 'mountains') {
-                const grad = chunkCtx.createLinearGradient(tx, ty, tx + baseTileSize, ty + baseTileSize);
-                grad.addColorStop(0, colors[tile.s]);
-                grad.addColorStop(1, darkenColor(colors[tile.s], 0.8));  // Темнее для "тени" пиков
-                chunkCtx.fillStyle = grad;
-            } else {
-                chunkCtx.fillStyle = colors[tile.s] || '#000';
-            }
-            chunkCtx.fillRect(tx, ty, baseTileSize, baseTileSize);
+            // Определяем, нужно ли показывать предпросмотр
+            let showPreview = false;
+            let previewLayer = null;
 
-            // 2. ОБЪЕКТЫ
-            if (tile.e) {
-                if (tile.e === 'cactus') {
-                    chunkCtx.fillStyle = colors['cactus'];
-                    // Рисуем кактус узким высоким прямоугольником в центре
-                    const width = 6;
-                    const height = baseTileSize - 12;
-                    chunkCtx.fillRect(tx + (baseTileSize - width) / 2, ty + 6, width, height);
-
-                    // Добавим маленькую "колючку" сбоку для узнаваемости
-                    chunkCtx.fillRect(tx + (baseTileSize - width) / 2 + width, ty + 12, 4, 2);
-                } else if (tile.e === 'stone_flower') {
-                    chunkCtx.fillStyle = colors['stone_flower']; // Убеждаемся, что цвет берется из конфига
-                    chunkCtx.beginPath();
-
-                    // Центрируем кружок точно в середине тайла
-                    const centerX = tx + baseTileSize / 2;
-                    const centerY = ty + baseTileSize / 2;
-                    const radius = baseTileSize / 4; // Сделаем радиус зависимым от размера тайла (8 при 32)
-
-                    chunkCtx.arc(centerX, centerY, radius, 0, Math.PI * 2);
-                    chunkCtx.fill();
-                } else if (tile.e.startsWith('flower_')) {
-                    // Обычные цветы оставляем квадратиками (или тоже можно скруглить)
-                    chunkCtx.fillStyle = colors[tile.e];
-                    chunkCtx.fillRect(tx + 12, ty + 12, 8, 8);
-                } else if (tile.e === 'grass_detail') {
-                    chunkCtx.fillStyle = colors['grass_detail'];
-                    chunkCtx.fillRect(tx + 10, ty + 14, 8, 3);
-                } else {
-                    // Деревья
-                    chunkCtx.fillStyle = 'rgba(0,0,0,0.2)';
-                    chunkCtx.fillRect(tx + 6, ty + 6, baseTileSize - 10, baseTileSize - 10);
-
-                    chunkCtx.fillStyle = colors[tile.e];
-                    chunkCtx.fillRect(tx + 4, ty + 4, baseTileSize - 10, baseTileSize - 10);
+            // Если этот тайл выбран для добычи
+            if (miningTarget && miningTarget.chunk && miningTarget.chunk === chunkCtx.canvas) {
+                // Проверяем координаты в чанке
+                const chunkX = miningTarget.tx % CHUNK_SIZE;
+                const chunkY = miningTarget.ty % CHUNK_SIZE;
+                if (chunkX === x && chunkY === y) {
+                    showPreview = true;
+                    previewLayer = miningTarget.blockInfo.layer;
                 }
             }
 
-            // 3. РУДА (Детектор)
-            if (isOreProspecting && tile.o) {
-                chunkCtx.fillStyle = colors[tile.o] || '#fff';
-                chunkCtx.fillRect(tx + 12, ty + 12, 8, 8);
+            // Рендерим слои
+            LayerRenderer.renderTileLayers(
+                chunkCtx,
+                tx, ty,
+                tile,
+                baseTileSize,
+                showPreview,
+                previewLayer,
+                { ore: isOreProspecting, liquid: isLiquidProspecting } // Передаем режимы проспектинга
+            );
+
+            // === ДЕТЕКТОРЫ (ОРЕ И ЖИДКОСТИ) ===
+            // Оставьте существующий код для детекторов
+            if (isOreProspecting && tile.o && tile.o !== 'none') {
+                // Подсветка руды при проспектинге
+                chunkCtx.fillStyle = '#FFFF00';
+                chunkCtx.globalAlpha = 0.3;
+                chunkCtx.fillRect(tx, ty, baseTileSize, baseTileSize);
+                chunkCtx.globalAlpha = 1.0;
+
+                // Текст с названием руды
+                chunkCtx.fillStyle = '#FFFFFF';
+                chunkCtx.font = '10px Arial';
+                chunkCtx.textAlign = 'center';
+                chunkCtx.fillText(
+                    tile.o.replace('ore_', ''),
+                    tx + baseTileSize / 2,
+                    ty + baseTileSize / 2
+                );
             }
 
-            // 4. ЖИДКОСТИ (новое): закрашиваем весь тайл для видимости чанка
-            if (isLiquidProspecting && tile.lm !== undefined) {  // Только если есть жила (lm существует)
-                const fillRatio = tile.la / tile.lm;  // 0.0 — 1.0
+            if (isLiquidProspecting && tile.lm !== undefined) {
+                const fillRatio = tile.la / tile.lm;
                 const fillHeight = fillRatio * baseTileSize;
 
-                // Заполнение снизу вверх (как жидкость в резервуаре)
                 chunkCtx.fillStyle = colors[tile.l] || '#000';
-                chunkCtx.globalAlpha = 0.85;  // Немного прозрачно, чтобы видеть рельеф под ней
+                chunkCtx.globalAlpha = 0.85;
                 chunkCtx.fillRect(tx, ty + baseTileSize - fillHeight, baseTileSize, fillHeight);
                 chunkCtx.globalAlpha = 1.0;
 
-                // Текст количества (всегда, даже 0L)
-                const fontSize = Math.min(16, Math.max(10, 14 * zoom));
+                const fontSize = Math.min(16, Math.max(10, 14));
                 chunkCtx.font = `${Math.floor(fontSize)}px Arial`;
                 chunkCtx.textAlign = 'center';
                 chunkCtx.textBaseline = 'middle';
-
-                // Цвет текста: белый на тёмном заполнении, серый на светлом/пустом
                 chunkCtx.fillStyle = fillRatio > 0.5 ? '#ffffff' : '#aaaaaa';
                 chunkCtx.fillText(`${tile.la}L`, tx + baseTileSize / 2, ty + baseTileSize / 2);
-
-                // Опционально: лёгкая рамка вокруг тайла с жидкостью для выделения
-                if (fillRatio > 0) {
-                    chunkCtx.strokeStyle = '#ffff00';
-                    chunkCtx.lineWidth = 1;
-                    chunkCtx.strokeRect(tx + 0.5, ty + 0.5, baseTileSize - 1, baseTileSize - 1);
-                }
             }
         }
     }
@@ -749,8 +2282,20 @@ window.addEventListener('keydown', (e) => {
     if (e.key.toLowerCase() === 'c') {
         followPlayer = !followPlayer;
     }
+    if (e.key.toLowerCase() === 'i') {
+        showLayerLegend = !showLayerLegend;
+    }
     if (e.key.toLowerCase() === 'f') {
         console.log(`Jump: ${player.jumpType}, Anim: ${player.jumpAnim.toFixed(2)}, OnGround: ${player.onGround}`);
+    }
+    if (e.key.toLowerCase() === 'h') {
+        highlightRadius = !highlightRadius;
+        console.log(`Подсветка радиуса: ${highlightRadius ? 'ВКЛ' : 'ВЫКЛ'}`);
+    }
+    if (e.key.toLowerCase() === 'tab') {
+        showInventory = !showInventory;
+        console.log(`Инвентарь: ${showInventory ? 'ПОКАЗАН' : 'СКРЫТ'}`);
+        e.preventDefault(); // Чтобы Tab не переключал фокус
     }
 });
 
@@ -786,20 +2331,30 @@ function loop() {
         velocityX *= inertiaDamping;
         velocityY *= inertiaDamping;
     }
+
     processChunkQueue();
     ctx.fillStyle = "#000";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    //камера следует за игроком
-    updatePlayer();
 
+    // Камера следует за игроком
+    updatePlayer();
     if (followPlayer) {
         camera.x = player.x * tileSize - canvas.width / 2;
         camera.y = player.y * tileSize - canvas.height / 2;
     }
 
+    renderWorld();
+    renderMiningPreview();
+    renderRadiusHighlight();
+    renderPlayer();
+    renderMiningProgress();
+    renderEnhancedUI(); // Используем улучшенный UI
 
-    renderWorld();  //рендер мира
-    renderPlayer(); //рендер игрока
+    if (showInventory) {
+        renderInventory();
+    } // инвентарь
+
+    checkSync();
     requestAnimationFrame(loop);
 }
 

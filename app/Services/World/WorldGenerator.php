@@ -38,8 +38,8 @@ class WorldGenerator
 
         for ($y = 0; $y < $this->chunkSize; $y++) {
             for ($x = 0; $x < $this->chunkSize; $x++) {
-                $wx = ($cx * $this->chunkSize + $x) + 50;
-                $wy = ($cy * $this->chunkSize + $y) + 50;
+                $wx = ($cx * $this->chunkSize + $x);
+                $wy = ($cy * $this->chunkSize + $y);
                 $tiles[$y][$x] = $this->generateTile($wx, $wy);
 
                 // Жидкость с вариацией per-tile
