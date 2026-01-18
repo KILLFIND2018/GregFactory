@@ -296,108 +296,140 @@ class BlockController extends Controller
             $isFinite = ResourceHelper::isFinite($blockType);
             $itemType = ResourceHelper::getItemType($blockType);
 
-            // Логика обработки добычи:
+            // Для персистентных блоков - только добавляем в инвентарь
+            if ($isPersistent) {
+                // Добавляем в инвентарь игрока
+                if ($dropCount > 0) {
+                    PlayerInventory::addItem($playerId, $itemType, $blockType, $dropCount);
+                }
 
-            // 1. Если блок персистентный - он остается на карте
-            if (!$isPersistent) {
-                // Удаляем блок из мира
-                Block::where([
-                    'world_id' => $worldId,
-                    'x' => $x,
-                    'y' => $y,
-                    'layer' => $layer
-                ])->delete();
+                DB::commit();
 
-                // ЛОГИКА ЗАМЕНЫ СЛОЯ (аналогично клиенту)
-                // Получаем текущий тайл
-                $tile = Block::getTileData($x, $y, $worldId);
+                return response()->json([
+                    'success' => true,
+                    'mined' => true,
+                    'persistent' => true,
+                    'drop' => $dropCount,
+                    'added_to_inventory' => $dropCount > 0,
+                    'tile' => Block::getTileData($x, $y, $worldId) // Возвращаем обновленный тайл
+                ]);
+            }
 
-                switch($layer) {
-                    case 'e':
-                        // Удаляем объект - ничего не заменяем
-                        break;
+            // Для не-персистентных блоков - удаляем и заменяем слои
+            // Удаляем текущий блок
+            Block::where([
+                'world_id' => $worldId,
+                'x' => $x,
+                'y' => $y,
+                'layer' => $layer
+            ])->delete();
 
-                    case 's':
-                        // Поверхность -> грунт/подпочва/руда/скала
-                        if (isset($tile['g']) && $tile['g'] !== 'none') {
-                            Block::saveTile($x, $y, ['s' => $tile['g']], $worldId);
-                            Block::where([
-                                'world_id' => $worldId,
-                                'x' => $x,
-                                'y' => $y,
-                                'layer' => 'g'
-                            ])->delete();
-                        } else if (isset($tile['p']) && $tile['p'] !== 'none') {
-                            Block::saveTile($x, $y, ['s' => $tile['p']], $worldId);
-                            Block::where([
-                                'world_id' => $worldId,
-                                'x' => $x,
-                                'y' => $y,
-                                'layer' => 'p'
-                            ])->delete();
-                        } else if (isset($tile['o']) && $tile['o'] !== 'none') {
-                            Block::saveTile($x, $y, ['s' => $tile['o']], $worldId);
-                            Block::where([
-                                'world_id' => $worldId,
-                                'x' => $x,
-                                'y' => $y,
-                                'layer' => 'o'
-                            ])->delete();
-                        } else {
-                            // Достигли скальной породы
-                            Block::saveTile($x, $y, ['s' => 'stone'], $worldId);
-                        }
-                        break;
+            // Получаем текущий тайл
+            $tile = Block::getTileData($x, $y, $worldId);
+            $updates = [];
 
-                    case 'g':
-                        // Грунт -> подпочва/руда/скала
-                        if (isset($tile['p']) && $tile['p'] !== 'none') {
-                            Block::saveTile($x, $y, ['s' => $tile['p']], $worldId);
-                            Block::where([
-                                'world_id' => $worldId,
-                                'x' => $x,
-                                'y' => $y,
-                                'layer' => 'p'
-                            ])->delete();
-                        } else if (isset($tile['o']) && $tile['o'] !== 'none') {
-                            Block::saveTile($x, $y, ['s' => $tile['o']], $worldId);
-                            Block::where([
-                                'world_id' => $worldId,
-                                'x' => $x,
-                                'y' => $y,
-                                'layer' => 'o'
-                            ])->delete();
-                        } else {
-                            Block::saveTile($x, $y, ['s' => 'stone'], $worldId);
-                        }
-                        break;
+            // Логика замены слоя
+            switch($layer) {
+                case 'e':
+                    // Удаляем объект - ничего не заменяем
+                    break;
 
-                    case 'o':
-                        // Руда -> скала
-                        Block::saveTile($x, $y, ['s' => 'stone'], $worldId);
-                        break;
+                case 's':
+                    // Поверхность -> грунт/подпочва/руда/скала
+                    if (isset($tile['g']) && $tile['g'] !== 'none') {
+                        $updates['s'] = $tile['g'];
+                        Block::where([
+                            'world_id' => $worldId,
+                            'x' => $x,
+                            'y' => $y,
+                            'layer' => 'g'
+                        ])->delete();
+                    } else if (isset($tile['p']) && $tile['p'] !== 'none') {
+                        $updates['s'] = $tile['p'];
+                        Block::where([
+                            'world_id' => $worldId,
+                            'x' => $x,
+                            'y' => $y,
+                            'layer' => 'p'
+                        ])->delete();
+                    } else if (isset($tile['o']) && $tile['o'] !== 'none') {
+                        $updates['s'] = $tile['o'];
+                        Block::where([
+                            'world_id' => $worldId,
+                            'x' => $x,
+                            'y' => $y,
+                            'layer' => 'o'
+                        ])->delete();
+                    } else {
+                        // Достигли скальной породы
+                        $updates['s'] = 'stone';
+                    }
+                    break;
+
+                case 'g':
+                    // Грунт -> подпочва/руда/скала
+                    if (isset($tile['p']) && $tile['p'] !== 'none') {
+                        $updates['s'] = $tile['p'];
+                        Block::where([
+                            'world_id' => $worldId,
+                            'x' => $x,
+                            'y' => $y,
+                            'layer' => 'p'
+                        ])->delete();
+                    } else if (isset($tile['o']) && $tile['o'] !== 'none') {
+                        $updates['s'] = $tile['o'];
+                        Block::where([
+                            'world_id' => $worldId,
+                            'x' => $x,
+                            'y' => $y,
+                            'layer' => 'o'
+                        ])->delete();
+                    } else {
+                        $updates['s'] = 'stone';
+                    }
+                    break;
+
+                case 'o':
+                    // Руда -> скала
+                    $updates['s'] = 'stone';
+                    break;
+            }
+
+            // Сохраняем изменения
+            if (!empty($updates)) {
+                foreach ($updates as $newLayer => $newBlockType) {
+                    Block::updateOrCreate(
+                        [
+                            'world_id' => $worldId,
+                            'x' => $x,
+                            'y' => $y,
+                            'layer' => $newLayer
+                        ],
+                        [
+                            'block_type' => $newBlockType,
+                            'amount' => 1
+                        ]
+                    );
                 }
             }
 
-            // 2. Если блок конечный и дает дроп - добавляем в инвентарь
+            // Добавляем в инвентарь
             if ($dropCount > 0 && $isFinite) {
-                // Добавляем в инвентарь игрока
-                $inventoryItem = PlayerInventory::addItem(
-                    $playerId,
-                    $itemType,
-                    $blockType,
-                    $dropCount
-                );
+                PlayerInventory::addItem($playerId, $itemType, $blockType, $dropCount);
             }
 
             DB::commit();
+            $updatedTile = Block::getTileData($x, $y, $worldId);
 
             return response()->json([
                 'success' => true,
                 'mined' => true,
-                'persistent' => $isPersistent,
+                'persistent' => false,
                 'drop' => $dropCount,
-                'added_to_inventory' => $dropCount > 0 && $isFinite
+                'added_to_inventory' => $dropCount > 0 && $isFinite,
+                'tile' => $updatedTile, // Важно: возвращаем обновленный тайл
+                'item_type' => $itemType,
+                'block_type' => $blockType
             ]);
         } catch (\Exception $e) {
             DB::rollBack();

@@ -300,8 +300,14 @@ window.spawnPlayer = async function(username) {
 };
 
 // Функция загрузки инвентаря
-async function loadPlayerInventory(playerId) {
+async function loadPlayerInventory(playerId, forceRefresh = false) {
     try {
+        // Если forceRefresh = true, очищаем кэш
+        if (forceRefresh) {
+            const cacheKey = `inventory_${playerId}`;
+            apiCache.delete(cacheKey);
+        }
+
         const res = await fetchPlayerInventory(playerId);
         const inventory = res.inventory ?? res;
 
@@ -310,17 +316,32 @@ async function loadPlayerInventory(playerId) {
             return;
         }
 
-        // Обновляем локальный инвентарь для блоков
+        // ОБНОВЛЯЕМ ЛОКАЛЬНЫЙ ИНВЕНТАРЬ
+        playerInventory.blocks = {};
+        playerInventory.items = {};
+
+        // Блоки
         if (inventory.blocks) {
-            const blocks = {};
             for (const [blockType, data] of Object.entries(inventory.blocks)) {
                 // data может быть объектом {count: X, item: {...}} или просто числом
-                blocks[blockType] = typeof data === 'object' ? data.count : data;
+                const count = typeof data === 'object' ? data.count : data;
+                if (count > 0) {
+                    playerInventory.blocks[blockType] = count;
+                }
             }
-            playerInventory.blocks = blocks;
         }
 
-        // Обновляем инструменты (если есть данные с сервера)
+        // Предметы
+        if (inventory.items) {
+            for (const [itemId, data] of Object.entries(inventory.items)) {
+                const count = typeof data === 'object' ? data.count : data;
+                if (count > 0) {
+                    playerInventory.items[itemId] = count;
+                }
+            }
+        }
+
+        // Инструменты
         if (inventory.tools) {
             for (const [id, tool] of Object.entries(inventory.tools)) {
                 if (playerInventory.tools[id]) {
@@ -329,8 +350,14 @@ async function loadPlayerInventory(playerId) {
             }
         }
 
+        // Синхронизируем текущий инструмент
+        if (inventory.current_tool && playerInventory.tools[inventory.current_tool]) {
+            playerInventory.currentTool = inventory.current_tool;
+        }
+
         console.log('Инвентарь загружен с сервера:', inventory);
         return inventory;
+
     } catch (error) {
         console.error('Ошибка загрузки инвентаря:', error);
         return null;
@@ -1318,94 +1345,61 @@ async function finishMining() {
         return;
     }
 
-    // === ОБНОВЛЕНИЕ НА СЕРВЕРЕ ===
     try {
-        let serverResult = null;
+        const serverResult = await mineBlock(
+            window.playerId,
+            tx,
+            ty,
+            blockInfo.layer,
+            blockInfo.type
+        );
 
-        if (resourceConfig.persistent) {
-        } else {
-            // Для обычных блоков отправляем запрос на добычу
-            serverResult = await mineBlock(
-                window.playerId,
-                tx,
-                ty,
-                blockInfo.layer,
-                blockInfo.type
-            );
-
-            // Если сервер вернул ошибку, отменяем добычу
-            if (!serverResult || !serverResult.success) {
-                throw new Error(serverResult?.error || 'Ошибка добычи на сервере');
-            }
+        // Если сервер вернул ошибку, отменяем добычу
+        if (!serverResult || !serverResult.success) {
+            throw new Error(serverResult?.error || 'Ошибка добычи на сервере');
         }
 
         // === ОБНОВЛЕНИЕ НА КЛИЕНТЕ ===
 
-// Обычная логика замены слоя
-        if (!resourceConfig.persistent) {
-            switch(blockInfo.layer) {
-                case 'e':
-                    tile.e = 'none';
-                    break;
-
-                case 's':
-                    if (tile.g && tile.g !== 'none') {
-                        tile.s = tile.g;
-                        tile.g = 'none';
-                    } else if (tile.p && tile.p !== 'none') {
-                        tile.s = tile.p;
-                        tile.p = 'none';
-                    } else if (tile.o && tile.o !== 'none') {
-                        tile.s = tile.o;
-                        tile.o = 'none';
-                    } else {
-                        // Достигли скальной породы
-                        tile.s = tile.r || 'stone';
-                    }
-                    break;
-
-                case 'g':
-                    if (tile.p && tile.p !== 'none') {
-                        tile.s = tile.p;
-                        tile.p = 'none';
-                    } else if (tile.o && tile.o !== 'none') {
-                        tile.s = tile.o;
-                        tile.o = 'none';
-                    } else {
-                        tile.s = tile.r || 'stone';
-                    }
-                    tile.g = 'none';
-                    break;
-
-                case 'p':
-                    if (tile.o && tile.o !== 'none') {
-                        tile.s = tile.o;
-                        tile.o = 'none';
-                    } else {
-                        tile.s = tile.r || 'stone';
-                    }
-                    tile.p = 'none';
-                    break;
-
-                case 'o':
-                    tile.o = 'none';
-                    tile.s = tile.r || 'stone';
-                    break;
-            }
-
-            // ВАЖНО: Сохраняем изменения тайла в базе
-            await saveTileChanges(tx, ty, tile);
+        // 1. ОБНОВЛЯЕМ ТАЙЛ ИЗ ОТВЕТА СЕРВЕРА
+        if (serverResult.tile) {
+            // Обновляем тайл в чанке
+            const lx = ((tx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+            const ly = ((ty % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+            chunkData.tiles[ly][lx] = serverResult.tile;
         }
 
+        // 2. СРАЗУ ОБНОВЛЯЕМ ИНВЕНТАРЬ НА КЛИЕНТЕ
+        if (serverResult.added_to_inventory) {
+            const resourceConfig = RESOURCE_CONFIG[blockInfo.type] || {};
+            const dropCount = serverResult.drop || resourceConfig.drop || 1;
 
+            // Определяем тип предмета для инвентаря
+            let itemType = blockInfo.type;
 
-        // Используем инструмент
-        playerInventory.useTool();
+            // Для персистентных блоков - используем специальный тип
+            if (resourceConfig.persistent) {
+                itemType = `persistent_${blockInfo.type}`;
+            }
 
-        // Обновляем прочность инструмента на сервере
+            // Добавляем в локальный инвентарь
+            playerInventory.addBlock(itemType, dropCount);
+
+            // Показываем уведомление
+            showNotification(`+${dropCount} ${blockInfo.type}`, '#4CAF50');
+        }
+
+        // 3. СИНХРОНИЗИРУЕМ ИНВЕНТАРЬ С СЕРВЕРОМ
         if (window.playerId) {
+            // Загружаем актуальный инвентарь с сервера
+            await loadPlayerInventory(window.playerId);
+
+            // Обновляем прочность инструмента
             const tool = playerInventory.getCurrentTool();
             if (tool.durability !== Infinity) {
+                playerInventory.useTool();
+
+                // Отправляем обновление прочности на сервер
                 await fetch(`${API_BASE}/inventory/update-tool`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -1418,24 +1412,18 @@ async function finishMining() {
             }
         }
 
-        // Перерисовываем чанк
+        // 4. ПЕРЕРИСОВЫВАЕМ ЧАНК
         refreshChunk(chunkData);
 
-        if (typeof cleanupChunkCache === 'function') {
-            cleanupChunkCache();
-        }
-
-        // Очищаем кэш чанков, чтобы изменения отобразились
+        // Очищаем кэш чанков
         cleanupChunkCache();
 
-        console.log(`Добыт блок: ${blockInfo.type}${resourceConfig.persistent ? ' (остается на карте)' : ''}`);
+        console.log(`Добыт блок: ${blockInfo.type}`);
         console.log('Результат сервера:', serverResult);
 
     } catch (error) {
         console.error('Ошибка синхронизации с сервером:', error);
-        // Можно показать сообщение об ошибке пользователю
-        alert('Ошибка синхронизации с сервером: ' + error.message);
-
+        showNotification(`Ошибка: ${error.message}`, '#F44336');
     }
 
     // Сбрасываем состояние добычи
@@ -1446,6 +1434,45 @@ async function finishMining() {
         clearTimeout(miningTimer);
         miningTimer = null;
     }
+}
+
+
+// Функция для показа уведомлений
+function showNotification(text, color = '#4CAF50') {
+    // Создаем элемент уведомления
+    const notification = document.createElement('div');
+    notification.textContent = text;
+    notification.style.cssText = `
+        position: fixed;
+        top: 100px;
+        right: 20px;
+        background: ${color};
+        color: white;
+        padding: 10px 20px;
+        border-radius: 5px;
+        z-index: 1000;
+        font-family: Arial;
+        font-size: 14px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+        opacity: 0;
+        transform: translateY(-20px);
+        transition: opacity 0.3s, transform 0.3s;
+    `;
+
+    document.body.appendChild(notification);
+
+    // Анимация появления
+    setTimeout(() => {
+        notification.style.opacity = '1';
+        notification.style.transform = 'translateY(0)';
+    }, 10);
+
+    // Автоматическое скрытие
+    setTimeout(() => {
+        notification.style.opacity = '0';
+        notification.style.transform = 'translateY(-20px)';
+        setTimeout(() => notification.remove(), 300);
+    }, 3000);
 }
 
 // Отменить добычу
