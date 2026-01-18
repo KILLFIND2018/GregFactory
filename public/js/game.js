@@ -210,32 +210,6 @@ async function fetchPlayerInventory(playerId) {
     );
 }
 
-// Добавить предмет в инвентарь
-async function addItemToInventory(playerId, itemType, itemId, quantity = 1) {
-    try {
-        const response = await fetch(`${API_BASE}/inventory/add`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                player_id: playerId,
-                item_type: itemType,
-                item_id: itemId,
-                quantity: quantity
-            })
-        });
-
-        if (!response.ok) {
-            const text = await response.text();
-            console.error('API ERROR', response.status, text);
-            throw new Error(text);
-        }
-        return await response.json();
-    } catch (error) {
-        console.error('Ошибка добавления в инвентарь:', error);
-        return null;
-    }
-}
-
 
 
 
@@ -1331,7 +1305,7 @@ function startMining(tx, ty, chunk, tile, blockInfo) {
 async function finishMining() {
     if (!miningTarget) return;
 
-    const { tx, ty, chunkData, tile, blockInfo } = miningTarget;
+    const { tx, ty, chunkData, blockInfo } = miningTarget;
     const resourceConfig = RESOURCE_CONFIG[blockInfo.type] || {
         finite: false,
         drop: 0,
@@ -2708,49 +2682,6 @@ function refreshVisibleChunks() {
             renderTilesToCanvas(data.tiles, chunkCtx);
         }
     });
-}
-
-// Сохранить изменения тайла в мире
-async function saveTileChanges(x, y, tile, worldId = 1) {
-    try {
-        // Собираем все слои для сохранения
-        const layers = {};
-
-        // Сохраняем только непустые слои
-        if (tile.e && tile.e !== 'none') layers.e = tile.e;
-        if (tile.s && tile.s !== 'none') layers.s = tile.s;
-        if (tile.g && tile.g !== 'none') layers.g = tile.g;
-        if (tile.o && tile.o !== 'none') layers.o = tile.o;
-        if (tile.p && tile.p !== 'none') layers.p = tile.p;
-        if (tile.r && tile.r !== 'none') layers.r = tile.r;
-        if (tile.l && tile.l !== 'none') {
-            layers.l = tile.l;
-            if (tile.la !== undefined) layers.la = tile.la;
-            if (tile.lm !== undefined) layers.lm = tile.lm;
-            if (tile.ld !== undefined) layers.ld = tile.ld;
-        }
-
-        const response = await fetch(`${API_BASE}/blocks/update-tile`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                world_id: worldId,
-                x: x,
-                y: y,
-                layers: layers
-            })
-        });
-
-        if (!response.ok) {
-            const text = await response.text();
-            console.error('API ERROR', response.status, text);
-            throw new Error(text);
-        }
-        return await response.json();
-    } catch (error) {
-        console.error('Ошибка сохранения тайла:', error);
-        return null;
-    }
 }
 
 // Controls
