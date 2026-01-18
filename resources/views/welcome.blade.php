@@ -26,6 +26,9 @@
     @vite('resources/js/app.js')
     -->
     <canvas id="game"></canvas>
+
+    <div id="#vue-inventory"></div>
+    @vite('resources/js/app.js')
     <script src="/js/game.js"></script>
     <script src="/js/test_game.js"></script>
 

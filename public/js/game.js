@@ -1,3 +1,91 @@
+// ========== VUE ИНВЕНТАРЬ ==========
+let useVueInventory = false
+let vueInventoryReady = false
+
+// ========== СИНХРОНИЗАЦИЯ ИНВЕНТАРЯ ==========
+let inventorySyncInProgress = false
+
+// Проверяем доступность Vue инвентаря
+function checkVueInventory() {
+    if (window.VueInventory) {
+        useVueInventory = true
+        vueInventoryReady = true
+        console.log('✅ Используется Vue инвентарь')
+
+        // Отключаем старый рендеринг инвентаря
+        showInventory = false
+    } else {
+        console.log('❌ Vue инвентарь не найден, используется canvas')
+        useVueInventory = false
+    }
+}
+
+// Функция для обновления данных в Vue инвентаре
+function updateVueInventory() {
+    if (!useVueInventory || !vueInventoryReady) return;
+
+    try {
+        // Небольшая задержка для гарантии обновления
+        setTimeout(() => {
+            const inventoryData = {
+                blocks: { ...playerInventory.blocks },
+                tools: {},
+                currentTool: playerInventory.currentTool
+            };
+
+            // Копируем инструменты
+            for (const [id, tool] of Object.entries(playerInventory.tools)) {
+                inventoryData.tools[id] = {
+                    durability: tool.durability,
+                    name: tool.name || TOOLS_CONFIG[id]?.name || id
+                };
+            }
+
+            // Отправляем обновление
+            if (window.VueInventory && window.VueInventory.updateData) {
+                window.VueInventory.updateData(inventoryData);
+            }
+
+            // Или через событие
+            window.dispatchEvent(new CustomEvent('inventory-update', {
+                detail: inventoryData
+            }));
+
+            console.log('Vue инвентарь обновлен:', inventoryData);
+        }, 100); // 100ms задержка
+    } catch (error) {
+        console.error('Ошибка обновления Vue инвентаря:', error);
+    }
+}
+
+// Показ/скрытие инвентаря
+function toggleInventory() {
+    if (useVueInventory && vueInventoryReady) {
+        // Используем Vue инвентарь
+        if (window.VueInventory.isVisible) {
+            window.VueInventory.hide()
+        } else {
+            window.VueInventory.show()
+        }
+    } else {
+        // Используем старый canvas инвентарь
+        showInventory = !showInventory
+    }
+}
+
+// Функция для добавления уведомления
+function showVueNotification(text, type = 'info') {
+    if (useVueInventory && window.VueInventory.addNotification) {
+        window.VueInventory.addNotification(text, type)
+    } else {
+        // Fallback на старую систему
+        showNotification(text, type === 'error' ? '#F44336' :
+            type === 'warning' ? '#FF9800' :
+                type === 'success' ? '#4CAF50' : '#2196F3')
+    }
+}
+
+
 // === CANVAS ===
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
@@ -280,9 +368,17 @@ async function loadPlayerInventory(playerId, forceRefresh = false) {
         if (forceRefresh) {
             const cacheKey = `inventory_${playerId}`;
             apiCache.delete(cacheKey);
+            console.log('Кэш инвентаря очищен');
         }
 
-        const res = await fetchPlayerInventory(playerId);
+        // Добавляем таймстамп для предотвращения кэширования
+        const timestamp = Date.now();
+        const res = await cachedFetch(
+            `${API_BASE}/inventory?player_id=${playerId}&t=${timestamp}`,
+            {},
+            forceRefresh ? null : `inventory_${playerId}` // Не кэшировать при forceRefresh
+        );
+
         const inventory = res.inventory ?? res;
 
         if (!inventory) {
@@ -293,6 +389,7 @@ async function loadPlayerInventory(playerId, forceRefresh = false) {
         // ОБНОВЛЯЕМ ЛОКАЛЬНЫЙ ИНВЕНТАРЬ
         playerInventory.blocks = {};
         playerInventory.items = {};
+        updateVueInventory();
 
         // Блоки
         if (inventory.blocks) {
@@ -772,6 +869,12 @@ const playerInventory = {
         if (this.tools[toolId]) {
             this.currentTool = toolId;
             console.log(`Инструмент изменен на: ${this.tools[toolId].name}`);
+
+            // Обновляем Vue инвентарь
+            if (useVueInventory) {
+                updateVueInventory()
+                showVueNotification(`Инструмент: ${this.tools[toolId].name}`, 'info')
+            }
             return true;
         }
         return false;
@@ -1301,23 +1404,13 @@ function startMining(tx, ty, chunk, tile, blockInfo) {
 
 
 
-// Завершить добычу
+// Изменяем функцию finishMining:
+
+// === ИСПРАВЛЕННАЯ ФУНКЦИЯ FINISHMINING ===
 async function finishMining() {
     if (!miningTarget) return;
 
     const { tx, ty, chunkData, blockInfo } = miningTarget;
-    const resourceConfig = RESOURCE_CONFIG[blockInfo.type] || {
-        finite: false,
-        drop: 0,
-        persistent: false
-    };
-
-    // Проверяем, является ли блок неразрушаемым
-    if (resourceConfig.unbreakable) {
-        console.log('Этот блок нельзя разрушить!');
-        cancelMining();
-        return;
-    }
 
     try {
         const serverResult = await mineBlock(
@@ -1343,32 +1436,38 @@ async function finishMining() {
             chunkData.tiles[ly][lx] = serverResult.tile;
         }
 
-        // 2. СРАЗУ ОБНОВЛЯЕМ ИНВЕНТАРЬ НА КЛИЕНТЕ
-        if (serverResult.added_to_inventory) {
-            const resourceConfig = RESOURCE_CONFIG[blockInfo.type] || {};
-            const dropCount = serverResult.drop || resourceConfig.drop || 1;
+        // 2. СИНХРОНИЗИРУЕМ ИНВЕНТАРЬ С СЕРВЕРОМ
+        if (window.playerId) {
+            await syncInventorySafe();
 
-            // Определяем тип предмета для инвентаря
-            let itemType = blockInfo.type;
+            // 3. ПОКАЗЫВАЕМ УВЕДОМЛЕНИЕ О ДОБЫЧЕ
+            if (serverResult.added_to_inventory) {
+                const resourceConfig = RESOURCE_CONFIG[blockInfo.type] || {};
+                const dropCount = serverResult.drop || resourceConfig.drop || 1;
 
-            // Для персистентных блоков - используем специальный тип
-            if (resourceConfig.persistent) {
-                itemType = `persistent_${blockInfo.type}`;
+                // Для персистентных блоков показываем специальное уведомление
+                if (resourceConfig.persistent) {
+                    if (useVueInventory) {
+                        showVueNotification(`+${dropCount} ${blockInfo.type} (остаётся на карте)`, 'success');
+                    } else {
+                        showNotification(`+${dropCount} ${blockInfo.type} (остаётся на карте)`, '#4CAF50');
+                    }
+                } else if (resourceConfig.finite === false) {
+                    if (useVueInventory) {
+                        showVueNotification(`+${dropCount} ${blockInfo.type} (бесконечный)`, 'info');
+                    } else {
+                        showNotification(`+${dropCount} ${blockInfo.type} (бесконечный)`, '#2196F3');
+                    }
+                } else {
+                    if (useVueInventory) {
+                        showVueNotification(`+${dropCount} ${blockInfo.type}`, 'success');
+                    } else {
+                        showNotification(`+${dropCount} ${blockInfo.type}`, '#4CAF50');
+                    }
+                }
             }
 
-            // Добавляем в локальный инвентарь
-            playerInventory.addBlock(itemType, dropCount);
-
-            // Показываем уведомление
-            showNotification(`+${dropCount} ${blockInfo.type}`, '#4CAF50');
-        }
-
-        // 3. СИНХРОНИЗИРУЕМ ИНВЕНТАРЬ С СЕРВЕРОМ
-        if (window.playerId) {
-            // Загружаем актуальный инвентарь с сервера
-            await loadPlayerInventory(window.playerId);
-
-            // Обновляем прочность инструмента
+            // 4. ОБНОВЛЯЕМ ПРОЧНОСТЬ ИНСТРУМЕНТА
             const tool = playerInventory.getCurrentTool();
             if (tool.durability !== Infinity) {
                 playerInventory.useTool();
@@ -1382,22 +1481,25 @@ async function finishMining() {
                         tool_id: tool.id,
                         durability: tool.durability
                     })
-                });
+                }).catch(err => console.error('Ошибка обновления прочности:', err));
             }
         }
 
-        // 4. ПЕРЕРИСОВЫВАЕМ ЧАНК
+        // 5. ПЕРЕРИСОВЫВАЕМ ЧАНК
         refreshChunk(chunkData);
-
-        // Очищаем кэш чанков
-        cleanupChunkCache();
 
         console.log(`Добыт блок: ${blockInfo.type}`);
         console.log('Результат сервера:', serverResult);
 
     } catch (error) {
         console.error('Ошибка синхронизации с сервером:', error);
-        showNotification(`Ошибка: ${error.message}`, '#F44336');
+
+        // Показываем уведомление об ошибке
+        if (useVueInventory) {
+            showVueNotification(`Ошибка: ${error.message}`, 'error');
+        } else {
+            showNotification(`Ошибка: ${error.message}`, '#F44336');
+        }
     }
 
     // Сбрасываем состояние добычи
@@ -1877,6 +1979,13 @@ function renderEnhancedUI() {
         // Полоса прогресса
         ctx.fillStyle = '#2196F3';
         ctx.fillRect(canvas.width - 210, 90, 180 * (miningProgress / 100), 5);
+    }
+
+    // Индикатор синхронизации инвентаря
+    if (inventorySyncInProgress) {
+        ctx.fillStyle = 'rgba(255, 215, 0, 0.8)';
+        ctx.font = '12px Arial';
+        ctx.fillText('Синхронизация инвентаря...', canvas.width - 240, canvas.height - 20);
     }
 
     // Предпросмотр добычи (под курсором)
@@ -2713,10 +2822,9 @@ window.addEventListener('keydown', (e) => {
         highlightRadius = !highlightRadius;
         console.log(`Подсветка радиуса: ${highlightRadius ? 'ВКЛ' : 'ВЫКЛ'}`);
     }
-    if (e.key.toLowerCase() === 'tab') {
-        showInventory = !showInventory;
-        console.log(`Инвентарь: ${showInventory ? 'ПОКАЗАН' : 'СКРЫТ'}`);
-        e.preventDefault(); // Чтобы Tab не переключал фокус
+    if (e.key.toLowerCase() === 't') {
+        e.preventDefault()
+        toggleInventory()
     }
 });
 
@@ -2784,7 +2892,7 @@ function loop() {
         renderPlayer();
         renderMiningProgress();
         renderEnhancedUI();
-        renderInventory();
+        //renderInventory();
     }
 
     // Синхронизация раз в 10 кадров
@@ -2997,4 +3105,52 @@ if (typeof window !== 'undefined') {
     window.TOOLS_CONFIG = TOOLS_CONFIG;
 
     console.log('🎮 Игровые переменные экспортированы для тестирования');
+}
+// Ждем загрузки Vue инвентаря
+setTimeout(() => {
+    checkVueInventory()
+
+    // Если игрок уже заспавнен, обновляем Vue инвентарь
+    if (window.playerId && vueInventoryReady) {
+        updateVueInventory()
+    }
+}, 1000)
+
+
+
+// === ФУНКЦИЯ БЕЗОПАСНОЙ СИНХРОНИЗАЦИИ ИНВЕНТАРЯ ===
+async function syncInventorySafe() {
+    if (!window.playerId || inventorySyncInProgress) return;
+
+    inventorySyncInProgress = true;
+
+    try {
+        // Сохраняем текущее состояние
+        const oldBlocks = { ...playerInventory.blocks };
+        const oldTools = { ...playerInventory.tools };
+
+        // Загружаем с сервера (без кэша)
+        const serverInventory = await loadPlayerInventory(window.playerId, true);
+
+        if (!serverInventory) {
+            console.warn('Не удалось загрузить инвентарь с сервера');
+            return;
+        }
+
+        // Логируем для отладки
+        console.log('Серверный инвентарь:', serverInventory);
+        console.log('Локальный инвентарь до:', oldBlocks);
+
+        // Обновляем Vue инвентарь
+        if (useVueInventory) {
+            updateVueInventory();
+        }
+
+        console.log('Инвентарь синхронизирован');
+
+    } catch (error) {
+        console.error('Ошибка синхронизации инвентаря:', error);
+    } finally {
+        inventorySyncInProgress = false;
+    }
 }
