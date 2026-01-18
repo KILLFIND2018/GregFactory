@@ -714,7 +714,6 @@ GameTests.performance = {
                     requestAnimationFrame(measureFrame);
                 } else {
                     // Расчет результатов
-                    const totalTime = currentTime - startTime;
                     const avgFrameTime = samples.length > 0 ?
                         samples.reduce((a, b) => a + b, 0) / samples.length : 0;
                     const avgFPS = avgFrameTime > 0 ? 1000 / avgFrameTime : 0;
@@ -745,9 +744,9 @@ GameTests.performance = {
         if (window.performance && performance.memory) {
             const memory = performance.memory;
             console.log('Использование памяти:', {
-                'Используется JS heap': `${(memory.usedJSHeapSize / 1024 / 1024).toFixed(2)} MB`,
-                'Всего JS heap': `${(memory.totalJSHeapSize / 1024 / 1024).toFixed(2)} MB`,
-                'Лимит heap': `${(memory.jsHeapSizeLimit / 1024 / 1024).toFixed(2)} MB`
+                'Used JS heap': `${(memory.usedJSHeapSize / 1024 / 1024).toFixed(2)} MB`,
+                'All JS heap': `${(memory.totalJSHeapSize / 1024 / 1024).toFixed(2)} MB`,
+                'Limit heap': `${(memory.jsHeapSizeLimit / 1024 / 1024).toFixed(2)} MB`
             });
 
             const memoryUsagePercent = (memory.usedJSHeapSize / memory.jsHeapSizeLimit) * 100;
