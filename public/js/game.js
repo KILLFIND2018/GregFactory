@@ -1444,6 +1444,10 @@ async function finishMining() {
         // Перерисовываем чанк
         refreshChunk(chunkData);
 
+        if (typeof cleanupChunkCache === 'function') {
+            cleanupChunkCache();
+        }
+
         // Очищаем кэш чанков, чтобы изменения отобразились
         cleanupChunkCache();
 
@@ -2962,6 +2966,8 @@ document.addEventListener("DOMContentLoaded", () => {
 const MAX_CHUNK_CACHE = 50; // Максимум 50 чанков в кэше
 
 // Вспомогательная функция для очистки старых чанков
+
+// === ИСПРАВЛЕННАЯ ФУНКЦИЯ ОЧИСТКИ КЭША ЧАНКОВ ===
 function cleanupChunkCache() {
     if (chunkCache.size <= MAX_CHUNK_CACHE) return;
 
@@ -2975,7 +2981,7 @@ function cleanupChunkCache() {
     const centerCY = Math.floor((camera.y + canvas.height / 2) / (CHUNK_SIZE * tileSize));
     const RENDER_RADIUS = 3; // Чанки в радиусе 3 от центра остаются
 
-    for (const key of chunksArray) {
+    for (const [key] of chunksArray) {
         const [cx, cy] = key.split(',').map(Number);
         const distance = Math.sqrt(Math.pow(cx - centerCX, 2) + Math.pow(cy - centerCY, 2));
 
