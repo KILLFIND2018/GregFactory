@@ -1323,16 +1323,6 @@ async function finishMining() {
         let serverResult = null;
 
         if (resourceConfig.persistent) {
-            // Для персистентных блоков (камень) блок остается на карте
-            // Просто добавляем дроп в инвентарь
-            if (resourceConfig.drop > 0 && window.playerId) {
-                serverResult = await addItemToInventory(
-                    window.playerId,
-                    'block',
-                    blockInfo.type,
-                    resourceConfig.drop
-                );
-            }
         } else {
             // Для обычных блоков отправляем запрос на добычу
             serverResult = await mineBlock(
@@ -1407,20 +1397,7 @@ async function finishMining() {
             await saveTileChanges(tx, ty, tile);
         }
 
-        // Добавляем добытый блок в локальный инвентарь
-        if (resourceConfig.drop > 0) {
-            playerInventory.addBlock(blockInfo.type, resourceConfig.drop);
 
-            // Обновляем инвентарь на сервере (если еще не обновляли)
-            if (!resourceConfig.persistent && window.playerId) {
-                await addItemToInventory(
-                    window.playerId,
-                    'block',
-                    blockInfo.type,
-                    resourceConfig.drop
-                );
-            }
-        }
 
         // Используем инструмент
         playerInventory.useTool();

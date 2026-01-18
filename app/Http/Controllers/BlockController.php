@@ -308,9 +308,75 @@ class BlockController extends Controller
                     'layer' => $layer
                 ])->delete();
 
-                // TODO: Здесь должна быть логика замены слоя
-                // Например, если добыли поверхность (s), то показываем грунт (g)
-                // Временно: просто удаляем блок
+                // ЛОГИКА ЗАМЕНЫ СЛОЯ (аналогично клиенту)
+                // Получаем текущий тайл
+                $tile = Block::getTileData($x, $y, $worldId);
+
+                switch($layer) {
+                    case 'e':
+                        // Удаляем объект - ничего не заменяем
+                        break;
+
+                    case 's':
+                        // Поверхность -> грунт/подпочва/руда/скала
+                        if (isset($tile['g']) && $tile['g'] !== 'none') {
+                            Block::saveTile($x, $y, ['s' => $tile['g']], $worldId);
+                            Block::where([
+                                'world_id' => $worldId,
+                                'x' => $x,
+                                'y' => $y,
+                                'layer' => 'g'
+                            ])->delete();
+                        } else if (isset($tile['p']) && $tile['p'] !== 'none') {
+                            Block::saveTile($x, $y, ['s' => $tile['p']], $worldId);
+                            Block::where([
+                                'world_id' => $worldId,
+                                'x' => $x,
+                                'y' => $y,
+                                'layer' => 'p'
+                            ])->delete();
+                        } else if (isset($tile['o']) && $tile['o'] !== 'none') {
+                            Block::saveTile($x, $y, ['s' => $tile['o']], $worldId);
+                            Block::where([
+                                'world_id' => $worldId,
+                                'x' => $x,
+                                'y' => $y,
+                                'layer' => 'o'
+                            ])->delete();
+                        } else {
+                            // Достигли скальной породы
+                            Block::saveTile($x, $y, ['s' => 'stone'], $worldId);
+                        }
+                        break;
+
+                    case 'g':
+                        // Грунт -> подпочва/руда/скала
+                        if (isset($tile['p']) && $tile['p'] !== 'none') {
+                            Block::saveTile($x, $y, ['s' => $tile['p']], $worldId);
+                            Block::where([
+                                'world_id' => $worldId,
+                                'x' => $x,
+                                'y' => $y,
+                                'layer' => 'p'
+                            ])->delete();
+                        } else if (isset($tile['o']) && $tile['o'] !== 'none') {
+                            Block::saveTile($x, $y, ['s' => $tile['o']], $worldId);
+                            Block::where([
+                                'world_id' => $worldId,
+                                'x' => $x,
+                                'y' => $y,
+                                'layer' => 'o'
+                            ])->delete();
+                        } else {
+                            Block::saveTile($x, $y, ['s' => 'stone'], $worldId);
+                        }
+                        break;
+
+                    case 'o':
+                        // Руда -> скала
+                        Block::saveTile($x, $y, ['s' => 'stone'], $worldId);
+                        break;
+                }
             }
 
             // 2. Если блок конечный и дает дроп - добавляем в инвентарь
