@@ -953,62 +953,67 @@ const MINING_RADIUS = 8;
 let showLayerLegend = false;
 
 // === СИСТЕМА МНОГОСЛОЙНОГО РЕНДЕРИНГА ===
+// Получить все видимые слои для тайла
 const LayerRenderer = {
-    // Получить все видимые слои для тайла
+
     getVisibleLayers(tile, showPreview = false, previewLayer = null, prospectingMode = { ore: false, liquid: false }) {
         const layers = [];
 
-        // 1. Биом (фон)
-        if (tile.b) {
-            layers.push({
-                type: 'biome',
-                value: tile.b,
-                visible: true,
-                priority: 0
-            });
-        }
+        // 0. ВСЕГДА добавляем базовый слой (чтобы не было чёрного тайла)
+        // Биом или дефолтный цвет
+        const biomeValue = tile.b || 'grass';
+        layers.push({
+            type: 'biome',
+            value: biomeValue,
+            visible: true,
+            priority: 0
+        });
 
-        // 2. Скальная порода (r) - бесконечный камень под всем
+        // 1. Скальная порода (r) - базовый слой под всем
         if (tile.r && tile.r !== 'none') {
             layers.push({
                 type: 'rock',
                 value: tile.r,
-                visible: !tile.o && !tile.g && !tile.s, // Только если нет других слоев
+                visible: true, // Всегда видна как база
                 priority: 1
             });
         }
 
-        // 3. Руда (o) - в скальной породе
+        // 2. Руда (o) - в скальной породе
+        // ВАЖНО: руда видна только если нет грунта и поверхности, ИЛИ в режиме проспектинга
         if (tile.o && tile.o !== 'none') {
+            const oreVisible = prospectingMode.ore ||
+                (!tile.g || tile.g === 'none') &&
+                (!tile.s || tile.s === 'none' || tile.s === 'stone');
             layers.push({
                 type: 'ore',
                 value: tile.o,
-                visible: (!tile.g && !tile.s) || showPreview,
+                visible: oreVisible || showPreview,
                 priority: 2
             });
         }
 
-        // 4. Подпочва (p) - переходный слой между грунтом и скалой
+        // 3. Подпочва (p)
         if (tile.p && tile.p !== 'none') {
             layers.push({
                 type: 'subsoil',
                 value: tile.p,
-                visible: !tile.g && !tile.s,
+                visible: (!tile.g || tile.g === 'none') && (!tile.s || tile.s === 'none'),
                 priority: 3
             });
         }
 
-        // 5. Грунт (g) - основной слой почвы
+        // 4. Грунт (g)
         if (tile.g && tile.g !== 'none') {
             layers.push({
                 type: 'ground',
                 value: tile.g,
-                visible: !tile.s || showPreview,
+                visible: !tile.s || tile.s === 'none' || showPreview,
                 priority: 4
             });
         }
 
-        // 6. Поверхность (s) - верхний слой
+        // 5. Поверхность (s) - ГЛАВНЫЙ видимый слой
         if (tile.s && tile.s !== 'none') {
             layers.push({
                 type: 'surface',
@@ -1018,7 +1023,7 @@ const LayerRenderer = {
             });
         }
 
-        // 7. Объекты (e) - растения, деревья
+        // 6. Объекты (e)
         if (tile.e && tile.e !== 'none') {
             layers.push({
                 type: 'entity',
@@ -1028,13 +1033,13 @@ const LayerRenderer = {
             });
         }
 
-        // 8. Жидкость (l) - поверх всего
+        // 7. Жидкость (l) - ВСЕГДА сохраняется, видна в режиме проспектинга
         if (tile.l && tile.l !== 'none') {
             layers.push({
                 type: 'liquid',
                 value: tile.l,
                 amount: tile.la || 0,
-                max: tile.lm || 0,
+                max: tile.lm || 100,
                 visible: prospectingMode.liquid,
                 priority: 7
             });
@@ -1043,21 +1048,38 @@ const LayerRenderer = {
         // Сортируем по приоритету
         layers.sort((a, b) => a.priority - b.priority);
 
-        // Режим предпросмотра для добычи
+        // Режим предпросмотра
         if (showPreview && previewLayer) {
-            const previewIndex = layers.findIndex(l => l.type === previewLayer);
+            const layerTypeMap = {
+                'e': 'entity',
+                's': 'surface',
+                'g': 'ground',
+                'o': 'ore',
+                'p': 'subsoil',
+                'l': 'liquid'
+            };
+            const previewType = layerTypeMap[previewLayer];
+            const previewIndex = layers.findIndex(l => l.type === previewType);
+
             if (previewIndex > -1) {
                 layers[previewIndex].preview = true;
-
-                // Показываем следующий слой
-                if (previewIndex + 1 < layers.length) {
-                    layers[previewIndex + 1].visible = true;
-                    layers[previewIndex + 1].previewNext = true;
-                }
             }
         }
 
-        return layers.filter(layer => layer.visible !== false);
+        // Фильтруем только видимые, НО гарантируем хотя бы один слой
+        const visibleLayers = layers.filter(layer => layer.visible !== false);
+
+        // Если ничего не видно - показываем биом
+        if (visibleLayers.length === 0) {
+            return [{
+                type: 'biome',
+                value: tile.b || 'stone',
+                visible: true,
+                priority: 0
+            }];
+        }
+
+        return visibleLayers;
     },
 
     // Отрисовать тайл со всеми слоями
@@ -1066,6 +1088,13 @@ const LayerRenderer = {
 
         // Очищаем область
         ctx.clearRect(x, y, tileSize, tileSize);
+
+        // ГАРАНТИЯ: если нет слоёв, рисуем базовый цвет
+        if (layers.length === 0) {
+            ctx.fillStyle = colors[tile.b] || colors['stone'] || '#808080';
+            ctx.fillRect(x, y, tileSize, tileSize);
+            return;
+        }
 
         // Рисуем слои от нижнего к верхнему
         layers.forEach(layer => {
@@ -1402,10 +1431,6 @@ function startMining(tx, ty, chunk, tile, blockInfo) {
     }, 100);
 }
 
-
-
-// Изменяем функцию finishMining:
-
 // === ИСПРАВЛЕННАЯ ФУНКЦИЯ FINISHMINING ===
 async function finishMining() {
     if (!miningTarget) return;
@@ -1421,80 +1446,102 @@ async function finishMining() {
             blockInfo.type
         );
 
-        // Если сервер вернул ошибку, отменяем добычу
         if (!serverResult || !serverResult.success) {
             throw new Error(serverResult?.error || 'Ошибка добычи на сервере');
         }
 
-        // === ОБНОВЛЕНИЕ НА КЛИЕНТЕ ===
-
-        // 1. ОБНОВЛЯЕМ ТАЙЛ ИЗ ОТВЕТА СЕРВЕРА
+        // Обновляем тайл в чанке
         if (serverResult.tile) {
-            // Обновляем тайл в чанке
             const lx = ((tx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
             const ly = ((ty % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-            chunkData.tiles[ly][lx] = serverResult.tile;
-        }
 
-        // 2. СИНХРОНИЗИРУЕМ ИНВЕНТАРЬ С СЕРВЕРОМ
-        if (window.playerId) {
-            await syncInventorySafe();
+            // Получаем старый тайл
+            const oldTile = chunkData.tiles[ly][lx];
 
-            // 3. ПОКАЗЫВАЕМ УВЕДОМЛЕНИЕ О ДОБЫЧЕ
-            if (serverResult.added_to_inventory) {
-                const resourceConfig = RESOURCE_CONFIG[blockInfo.type] || {};
-                const dropCount = serverResult.drop || resourceConfig.drop || 1;
+            // Создаём новый тайл из ответа сервера
+            const newTile = { ...serverResult.tile };
 
-                // Для персистентных блоков показываем специальное уведомление
-                if (resourceConfig.persistent) {
-                    if (useVueInventory) {
-                        showVueNotification(`+${dropCount} ${blockInfo.type} (остаётся на карте)`, 'success');
-                    } else {
-                        showNotification(`+${dropCount} ${blockInfo.type} (остаётся на карте)`, '#4CAF50');
-                    }
-                } else if (resourceConfig.finite === false) {
-                    if (useVueInventory) {
-                        showVueNotification(`+${dropCount} ${blockInfo.type} (бесконечный)`, 'info');
-                    } else {
-                        showNotification(`+${dropCount} ${blockInfo.type} (бесконечный)`, '#2196F3');
-                    }
-                } else {
-                    if (useVueInventory) {
-                        showVueNotification(`+${dropCount} ${blockInfo.type}`, 'success');
-                    } else {
-                        showNotification(`+${dropCount} ${blockInfo.type}`, '#4CAF50');
+            // === ГАРАНТИИ СОХРАННОСТИ ДАННЫХ ===
+
+            // 1. Биом - всегда сохраняем
+            if (!newTile.b && oldTile.b) {
+                newTile.b = oldTile.b;
+            }
+
+            // 2. Жидкость - всегда сохраняем
+            if (oldTile.l && oldTile.l !== 'none') {
+                if (!newTile.l || newTile.l === 'none') {
+                    newTile.l = oldTile.l;
+                    newTile.la = oldTile.la || 0;
+                    newTile.lm = oldTile.lm || 100;
+                }
+            }
+
+            // 3. Руда - сохраняем если не добывали руду
+            if (blockInfo.layer !== 'o') {
+                if (oldTile.o && oldTile.o !== 'none') {
+                    if (!newTile.o || newTile.o === 'none') {
+                        newTile.o = oldTile.o;
                     }
                 }
             }
 
-            // 4. ОБНОВЛЯЕМ ПРОЧНОСТЬ ИНСТРУМЕНТА
+            // 4. Грунт - сохраняем если не добывали грунт и не добывали поверхность
+            if (blockInfo.layer !== 'g' && blockInfo.layer !== 's') {
+                if (oldTile.g && oldTile.g !== 'none') {
+                    if (!newTile.g || newTile.g === 'none') {
+                        newTile.g = oldTile.g;
+                    }
+                }
+            }
+
+            // 5. Поверхность - если пустая, берём из старого или ставим stone
+            if (!newTile.s || newTile.s === 'none') {
+                if (oldTile.s && oldTile.s !== 'none' && blockInfo.layer !== 's') {
+                    newTile.s = oldTile.s;
+                } else {
+                    newTile.s = 'stone';
+                }
+            }
+
+            chunkData.tiles[ly][lx] = newTile;
+
+            console.log('Тайл обновлён:', {
+                layer: blockInfo.layer,
+                type: blockInfo.type,
+                old: oldTile,
+                new: newTile,
+                serverTile: serverResult.tile
+            });
+        }
+
+        // Синхронизируем инвентарь
+        if (window.playerId) {
+            await syncInventorySafe();
+
+            if (serverResult.added_to_inventory) {
+                const resourceConfig = RESOURCE_CONFIG[blockInfo.type] || {};
+                const dropCount = serverResult.drop || resourceConfig.drop || 1;
+
+                if (useVueInventory) {
+                    showVueNotification(`+${dropCount} ${blockInfo.type}`, 'success');
+                } else {
+                    showNotification(`+${dropCount} ${blockInfo.type}`, '#4CAF50');
+                }
+            }
+
             const tool = playerInventory.getCurrentTool();
             if (tool.durability !== Infinity) {
                 playerInventory.useTool();
-
-                // Отправляем обновление прочности на сервер
-                await fetch(`${API_BASE}/inventory/update-tool`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        player_id: window.playerId,
-                        tool_id: tool.id,
-                        durability: tool.durability
-                    })
-                }).catch(err => console.error('Ошибка обновления прочности:', err));
             }
         }
 
-        // 5. ПЕРЕРИСОВЫВАЕМ ЧАНК
         refreshChunk(chunkData);
-
-        console.log(`Добыт блок: ${blockInfo.type}`);
-        console.log('Результат сервера:', serverResult);
+        console.log(`Добыт блок: ${blockInfo.type} из слоя ${blockInfo.layer}`);
 
     } catch (error) {
-        console.error('Ошибка синхронизации с сервером:', error);
+        console.error('Ошибка добычи:', error);
 
-        // Показываем уведомление об ошибке
         if (useVueInventory) {
             showVueNotification(`Ошибка: ${error.message}`, 'error');
         } else {
@@ -1502,7 +1549,7 @@ async function finishMining() {
         }
     }
 
-    // Сбрасываем состояние добычи
+    // Сброс состояния
     miningMode = false;
     miningTarget = null;
     miningProgress = 0;
@@ -2694,6 +2741,16 @@ const colors = {
     'heavy_oil': '#1a0f00',      // Тёмно-коричневый (тяжёлая)
     'light_oil': '#331a00',      // Светло-коричневый (лёгкая)
     'oil': '#260f00',            // Средний коричневый (обычная нефть)
+
+
+    // Добавить fallback цвета
+    'default': '#808080',
+    'none': '#000000',
+    'unknown': '#FF00FF', // Магента для отладки
+
+    // Грунтовые блоки (если отсутствуют)
+    'sand_ground': '#c2a679',
+    'dirt_ground': '#6b4423',
 };
 
 //Подсветка разных слоев при добыче
