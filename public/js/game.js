@@ -1450,84 +1450,96 @@ async function finishMining() {
             throw new Error(serverResult?.error || 'Ошибка добычи на сервере');
         }
 
-        // Обновляем тайл в чанке
         if (serverResult.tile) {
             const lx = ((tx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
             const ly = ((ty % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
 
-            // Получаем старый тайл
             const oldTile = chunkData.tiles[ly][lx];
-
-            // Создаём новый тайл из ответа сервера
             const newTile = { ...serverResult.tile };
 
-            // === ГАРАНТИИ СОХРАННОСТИ ДАННЫХ ===
+            /* ===============================
+               1. БАЗОВЫЕ ГАРАНТИИ
+            =============================== */
 
-            // 1. Биом - всегда сохраняем
+            // Биом
             if (!newTile.b && oldTile.b) {
                 newTile.b = oldTile.b;
             }
 
-            // 2. Жидкость - всегда сохраняем
+            // Жидкость
             if (oldTile.l && oldTile.l !== 'none') {
                 if (!newTile.l || newTile.l === 'none') {
-                    newTile.l = oldTile.l;
+                    newTile.l  = oldTile.l;
                     newTile.la = oldTile.la || 0;
                     newTile.lm = oldTile.lm || 100;
                 }
             }
 
-            // 3. Руда - сохраняем если не добывали руду
-            if (blockInfo.layer !== 'o') {
-                if (oldTile.o && oldTile.o !== 'none') {
-                    if (!newTile.o || newTile.o === 'none') {
-                        newTile.o = oldTile.o;
-                    }
+            // Руда (если не добывали руду)
+            if (blockInfo.layer !== 'o' && oldTile.o && oldTile.o !== 'none') {
+                if (!newTile.o || newTile.o === 'none') {
+                    newTile.o = oldTile.o;
                 }
             }
 
-            // 4. Грунт - сохраняем если не добывали грунт и не добывали поверхность
-            if (blockInfo.layer !== 'g' && blockInfo.layer !== 's') {
-                if (oldTile.g && oldTile.g !== 'none') {
-                    if (!newTile.g || newTile.g === 'none') {
-                        newTile.g = oldTile.g;
-                    }
+            /* ===============================
+               2. ГРУНТ (g)
+               — сохраняем, если его не копали
+            =============================== */
+
+            if (blockInfo.layer !== 'g' && oldTile.g && oldTile.g !== 'none') {
+                if (!newTile.g || newTile.g === 'none') {
+                    newTile.g = oldTile.g;
                 }
             }
 
-            // 5. Поверхность - если пустая, берём из старого или ставим stone
-            if (!newTile.s || newTile.s === 'none') {
-                if (oldTile.s && oldTile.s !== 'none' && blockInfo.layer !== 's') {
-                    newTile.s = oldTile.s;
-                } else {
-                    newTile.s = 'stone';
-                }
+            /* ===============================
+               3. ПОВЕРХНОСТЬ (s)
+               КЛЮЧЕВАЯ ЛОГИКА
+            =============================== */
+
+            // Если мы добыли ОБЪЕКТ (трава, дерево)
+            if (blockInfo.layer === 'e') {
+                // Поверхность должна быть пустой,
+                // тогда LayerRenderer покажет g (dirt)
+                newTile.s = 'none';
             }
+
+            // Если мы добыли ПОВЕРХНОСТЬ
+            else if (blockInfo.layer === 's') {
+                // Открываем грунт
+                newTile.s = 'none';
+            }
+
+            // Фоллбек: если surface всё ещё пустая и грунта нет — камень
+            if ((!newTile.s || newTile.s === 'none') &&
+                (!newTile.g || newTile.g === 'none')) {
+                newTile.s = 'stone';
+            }
+
+            /* ===============================
+               4. ЗАПИСЬ + ЛОГ
+            =============================== */
 
             chunkData.tiles[ly][lx] = newTile;
 
-            console.log('Тайл обновлён:', {
-                layer: blockInfo.layer,
-                type: blockInfo.type,
-                old: oldTile,
-                new: newTile,
-                serverTile: serverResult.tile
+            console.log('🧱 finishMining result', {
+                mined: `${blockInfo.layer}:${blockInfo.type}`,
+                oldTile,
+                newTile
             });
         }
 
-        // Синхронизируем инвентарь
+        /* ===============================
+           5. ИНВЕНТАРЬ / ИНСТРУМЕНТ
+        =============================== */
+
         if (window.playerId) {
             await syncInventorySafe();
 
             if (serverResult.added_to_inventory) {
-                const resourceConfig = RESOURCE_CONFIG[blockInfo.type] || {};
-                const dropCount = serverResult.drop || resourceConfig.drop || 1;
-
-                if (useVueInventory) {
-                    showVueNotification(`+${dropCount} ${blockInfo.type}`, 'success');
-                } else {
-                    showNotification(`+${dropCount} ${blockInfo.type}`, '#4CAF50');
-                }
+                const drop = serverResult.drop || 1;
+                showVueNotification?.(`+${drop} ${blockInfo.type}`, 'success');
             }
 
             const tool = playerInventory.getCurrentTool();
@@ -1537,22 +1549,20 @@ async function finishMining() {
         }
 
         refreshChunk(chunkData);
-        console.log(`Добыт блок: ${blockInfo.type} из слоя ${blockInfo.layer}`);
 
     } catch (error) {
         console.error('Ошибка добычи:', error);
-
-        if (useVueInventory) {
-            showVueNotification(`Ошибка: ${error.message}`, 'error');
-        } else {
-            showNotification(`Ошибка: ${error.message}`, '#F44336');
-        }
+        showVueNotification?.(`Ошибка: ${error.message}`, 'error');
     }
 
-    // Сброс состояния
+    /* ===============================
+       6. СБРОС СОСТОЯНИЯ
+    =============================== */
+
     miningMode = false;
     miningTarget = null;
     miningProgress = 0;
+
     if (miningTimer) {
         clearTimeout(miningTimer);
         miningTimer = null;
