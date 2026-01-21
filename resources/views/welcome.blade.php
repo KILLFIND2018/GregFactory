@@ -29,7 +29,7 @@
 
     <div id="#vue-inventory"></div>
     @vite('resources/js/app.js')
-    <script src="/js/game.js"></script>
+    <script src="/js/game_v2.js"></script>
     <script src="/js/test_game.js"></script>
 
 

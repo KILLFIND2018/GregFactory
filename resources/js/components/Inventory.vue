@@ -173,7 +173,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import {computed, onMounted, onUnmounted, ref} from 'vue'
 
 // ========== СОСТОЯНИЕ ==========
 const isVisible = ref(false)
@@ -409,14 +409,12 @@ onMounted(() => {
   window.addEventListener('keydown', handleKeydown)
 
   // Периодическое обновление
-  const interval = setInterval(() => {
-    if (isVisible.value && playerId.value) {
-      refresh()
-    }
+    // Сохраняем для очистки
+  window.inventoryInterval = setInterval(() => {
+      if (isVisible.value && playerId.value) {
+          refresh()
+      }
   }, 10000)
-
-  // Сохраняем для очистки
-  window.inventoryInterval = interval
 })
 
 onUnmounted(() => {

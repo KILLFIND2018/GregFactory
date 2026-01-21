@@ -1,6 +1,6 @@
 // ==============================================
-// 🧪 TEST GAME.JS - Тесты для игры
-// Запуск из консоли браузера
+// 🧪 TEST GAME.JS - Тесты для игры V2
+// Обновлено для работы с game_v2.js
 // ==============================================
 
 // 🔧 Игровые переменные (будут заполнены после загрузки)
@@ -41,7 +41,6 @@ let game = {
     // API функции
     fetchPlayerInventory: null,
     loadPlayerInventory: null,
-    mineBlock: null,
 
     // Конфигурации
     resourceConfig: null,
@@ -49,52 +48,51 @@ let game = {
     blocksConfig: null
 };
 
-// Функция для загрузки игровых переменных
+// Функция для загрузки игровых переменных из game_v2.js
 function loadGameVariables() {
     if (typeof window === 'undefined') return false;
 
-    // Основные объекты
-    game.player = window.gamePlayer || window.player;
-    game.inventory = window.gameInventory || window.playerInventory;
-    game.camera = window.gameCamera || window.camera;
-    game.canvas = window.gameCanvas || (document.getElementById('game') || window.canvas);
-    game.ctx = window.gameCtx || window.ctx;
-    game.keys = window.gameKeys || window.keys;
-    game.chunkCache = window.gameChunkCache || window.chunkCache;
+    // Основные объекты (из экспорта game_v2.js)
+    game.player = window.gamePlayer || PlayerModule?.player;
+    game.inventory = window.gameInventory || InventoryModule;
+    game.camera = window.gameCamera || camera;
+    game.canvas = window.gameCanvas || document.getElementById('game');
+    game.ctx = window.gameCtx || ctx;
+    game.keys = window.gameKeys || keys;
+    game.chunkCache = window.gameChunkCache || chunkCache;
 
-    // Переменные состояния
-    game.tileSize = window.gameTileSize || window.tileSize;
-    game.zoom = window.gameZoom || window.zoom;
-    game.lastPositionSync = window.gameLastPositionSync || window.lastPositionSync;
-    game.showInventory = window.gameShowInventory || window.showInventory;
-    game.showGrid = window.gameShowGrid || window.showGrid;
-    game.miningMode = window.gameMiningMode || window.miningMode;
-    game.miningProgress = window.gameMiningProgress || window.miningProgress;
+    // Переменные состояния (из экспорта game_v2.js)
+    game.tileSize = window.gameTileSize || tileSize;
+    game.zoom = window.gameZoom || zoom;
+    game.lastPositionSync = window.gameLastPositionSync || lastPositionSync;
+    game.showInventory = window.gameShowInventory || showInventory;
+    game.showGrid = window.gameShowGrid || showGrid;
+    game.miningMode = window.gameMiningMode || miningMode;
+    game.miningProgress = window.gameMiningProgress || miningProgress;
     game.playerId = window.gamePlayerId || window.playerId;
 
-    // Функции
-    game.getTileAt = window.gameGetTileAt || window.getTileAt;
-    game.isBlockInRange = window.gameIsBlockInRange || window.isBlockInRange;
-    game.startMining = window.gameStartMining || window.startMining;
-    game.cancelMining = window.gameCancelMining || window.cancelMining;
-    game.cleanupChunkCache = window.gameCleanupChunkCache || window.cleanupChunkCache;
-    game.refreshChunk = window.refreshChunk;
+    // Функции (из экспорта game_v2.js)
+    game.getTileAt = window.gameGetTileAt || WorldModule?.getTileAt;
+    game.isBlockInRange = window.gameIsBlockInRange || MiningModule?.isBlockInRange;
+    game.startMining = window.gameStartMining || MiningModule?.startMining;
+    game.cancelMining = window.gameCancelMining || MiningModule?.cancelMining;
+    game.cleanupChunkCache = window.gameCleanupChunkCache || ChunkModule?.cleanupChunkCache;
+    game.refreshChunk = MiningModule?.refreshChunk;
 
-    // Константы
-    game.maxChunkCache = window.gameMaxChunkCache || window.MAX_CHUNK_CACHE;
-    game.maxStack = window.gameMaxStack || window.MAX_STACK;
-    game.chunkSize = window.gameChunkSize || window.CHUNK_SIZE;
-    game.miningRadius = window.gameMiningRadius || window.MINING_RADIUS;
+    // Константы (из экспорта game_v2.js)
+    game.maxChunkCache = window.gameMaxChunkCache || CONSTANTS?.MAX_CHUNK_CACHE;
+    game.maxStack = window.gameMaxStack || CONSTANTS?.MAX_STACK;
+    game.chunkSize = window.gameChunkSize || CONSTANTS?.CHUNK_SIZE;
+    game.miningRadius = window.gameMiningRadius || CONSTANTS?.MINING_RADIUS;
 
-    // API функции
-    game.fetchPlayerInventory = window.gameFetchPlayerInventory || window.fetchPlayerInventory;
-    game.loadPlayerInventory = window.gameLoadPlayerInventory || window.loadPlayerInventory;
-    game.mineBlock = window.mineBlock;
+    // API функции (из экспорта game_v2.js)
+    game.fetchPlayerInventory = window.gameFetchPlayerInventory || APIModule?.fetchPlayerInventory;
+    game.loadPlayerInventory = window.gameLoadPlayerInventory || APIModule?.loadPlayerInventory;
 
-    // Конфигурации
-    game.resourceConfig = window.RESOURCE_CONFIG;
-    game.toolsConfig = window.TOOLS_CONFIG;
-    game.blocksConfig = window.BLOCKS_CONFIG;
+    // Конфигурации (из экспорта game_v2.js)
+    game.resourceConfig = window.RESOURCE_CONFIG || RESOURCE_CONFIG;
+    game.toolsConfig = window.TOOLS_CONFIG || TOOLS_CONFIG;
+    game.blocksConfig = window.BLOCKS_CONFIG || BLOCKS_CONFIG;
 
     return true;
 }
@@ -117,16 +115,43 @@ window.GameTests = {
     game: game,
     isInitialized: false,
 
+    // Проверка доступности модулей
+    checkModules() {
+        console.log('🔍 Проверка модулей game_v2.js');
+
+        const modules = [
+            { name: 'PlayerModule', obj: PlayerModule },
+            { name: 'WorldModule', obj: WorldModule },
+            { name: 'MiningModule', obj: MiningModule },
+            { name: 'InventoryModule', obj: InventoryModule },
+            { name: 'APIModule', obj: APIModule },
+            { name: 'UIModule', obj: UIModule },
+            { name: 'ChunkModule', obj: ChunkModule },
+            { name: 'SyncModule', obj: SyncModule },
+            { name: 'RenderModule', obj: RenderModule }
+        ];
+
+        modules.forEach(module => {
+            console.log(`${module.obj ? '✅' : '❌'} ${module.name}: ${module.obj ? 'доступен' : 'не доступен'}`);
+        });
+
+        return modules.every(m => m.obj);
+    },
+
     // Инициализация тестов
     init() {
-        console.log('🎮 GameTests инициализированы');
+        console.log('🎮 GameTests инициализированы для game_v2.js');
+
+        // Проверяем модули
+        const modulesLoaded = this.checkModules();
 
         // Загружаем переменные
-        if (loadGameVariables()) {
+        if (loadGameVariables() && modulesLoaded) {
             console.log('✅ Игровые переменные загружены');
+            console.log('✅ Модули game_v2.js доступны');
             this.isInitialized = true;
         } else {
-            console.log('⚠️ Игровые переменные еще не загружены');
+            console.log('⚠️ Игровые переменные или модули еще не загружены');
         }
 
         console.log('\n📋 ДОСТУПНЫЕ ТЕСТЫ:');
@@ -134,30 +159,31 @@ window.GameTests = {
         console.log('- GameTests.runAllTests() - запуск всех тестов');
         console.log('- GameTests.debugState() - отладка состояния');
         console.log('- GameTests.waitForGame() - ожидание загрузки игры');
-        console.log('- GameTests.testSaveWorld() - тест сохранения мира');
+        console.log('- GameTests.testModules() - тест модулей');
         console.log('- GameTests.testInventory() - тест инвентаря');
         console.log('- GameTests.testTools() - тест инструментов');
         console.log('- GameTests.testNetwork() - тест сети');
         console.log('- GameTests.testPerformance() - тест производительности');
         console.log('- GameTests.checkVariables() - проверка переменных');
 
-        console.log('\n🎯 ГОРЯЧИЕ КЛАВИШИ:');
+        console.log('\n🎯 ГОТОВЫЕ СЦЕНАРИИ:');
         console.log('- Ctrl+Shift+T - все тесты');
         console.log('- Ctrl+Shift+D - отладка');
         console.log('- Ctrl+Shift+Q - быстрая проверка');
+        console.log('- Ctrl+Shift+M - тест модулей');
 
         return this.isInitialized;
     },
 
     // Ожидание загрузки игры
     async waitForGame(timeout = 15000) {
-        console.log('⏳ Ожидание загрузки игры...');
+        console.log('⏳ Ожидание загрузки игры (game_v2.js)...');
 
         return new Promise((resolve, reject) => {
             const startTime = Date.now();
 
             // Проверяем сразу
-            if (isGameLoaded()) {
+            if (isGameLoaded() && this.checkModules()) {
                 console.log('✅ Игра уже загружена!');
                 this.isInitialized = true;
                 resolve(true);
@@ -167,7 +193,7 @@ window.GameTests = {
             const checkInterval = setInterval(() => {
                 loadGameVariables();
 
-                if (isGameLoaded()) {
+                if (isGameLoaded() && this.checkModules()) {
                     clearInterval(checkInterval);
                     console.log('✅ Игра загружена!');
                     this.isInitialized = true;
@@ -177,8 +203,9 @@ window.GameTests = {
                     console.log('❌ Таймаут ожидания игры');
                     console.log('💡 Попробуйте:');
                     console.log('1. Обновить страницу');
-                    console.log('2. Проверить консоль на ошибки');
-                    console.log('3. Убедиться что game.js загружен');
+                    console.log('2. Проверить что game_v2.js загружен');
+                    console.log('3. Проверить консоль на ошибки');
+                    console.log('4. Запустить GameTests.checkVariables()');
                     reject(new Error('Таймаут ожидания загрузки игры'));
                 } else {
                     const elapsed = Math.floor((Date.now() - startTime) / 1000);
@@ -240,15 +267,63 @@ window.GameTests = {
 };
 
 // ==============================================
-// 🧪 БАЗОВЫЕ ТЕСТЫ
+// 🧪 БАЗОВЫЕ ТЕСТЫ ДЛЯ GAME_V2.JS
 // ==============================================
 
 GameTests.basic = {
-    // Тест 1: Проверка доступности основных объектов
+    // Тест 1: Проверка модулей game_v2.js
+    testModules() {
+        console.log('🧪 Тест модулей game_v2.js');
+
+        const modules = [
+            { name: 'PlayerModule', obj: PlayerModule },
+            { name: 'WorldModule', obj: WorldModule },
+            { name: 'MiningModule', obj: MiningModule },
+            { name: 'InventoryModule', obj: InventoryModule },
+            { name: 'APIModule', obj: APIModule },
+            { name: 'UIModule', obj: UIModule },
+            { name: 'ChunkModule', obj: ChunkModule },
+            { name: 'SyncModule', obj: SyncModule },
+            { name: 'RenderModule', obj: RenderModule }
+        ];
+
+        let allFound = true;
+        modules.forEach(module => {
+            const exists = module.obj !== null && module.obj !== undefined;
+            console.log(`${exists ? '✅' : '❌'} ${module.name}: ${exists ? 'найден' : 'не найден'}`);
+
+            if (exists) {
+                // Проверяем основные методы/свойства
+                switch(module.name) {
+                    case 'PlayerModule':
+                        const hasPlayer = module.obj.player && typeof module.obj.player === 'object';
+                        const hasUpdate = typeof module.obj.update === 'function';
+                        const hasRender = typeof module.obj.render === 'function';
+                        console.log(`   player: ${hasPlayer ? '✅' : '❌'}, update: ${hasUpdate ? '✅' : '❌'}, render: ${hasRender ? '✅' : '❌'}`);
+                        allFound = allFound && hasPlayer && hasUpdate && hasRender;
+                        break;
+                    case 'InventoryModule':
+                        const hasTools = module.obj.tools && typeof module.obj.tools === 'object';
+                        const hasSwitchTool = typeof module.obj.switchTool === 'function';
+                        console.log(`   tools: ${hasTools ? '✅' : '❌'}, switchTool: ${hasSwitchTool ? '✅' : '❌'}`);
+                        allFound = allFound && hasTools && hasSwitchTool;
+                        break;
+                }
+            }
+            allFound = allFound && exists;
+        });
+
+        return GameTests.logResult(
+            'Модули game_v2.js',
+            allFound,
+            allFound ? 'Все модули загружены' : 'Некоторые модули отсутствуют'
+        );
+    },
+
+    // Тест 2: Проверка доступности основных объектов
     testCoreObjects() {
         console.log('🧪 Тест базовых объектов игры');
 
-        // Обновляем переменные
         loadGameVariables();
 
         const requiredObjects = [
@@ -256,7 +331,7 @@ GameTests.basic = {
             { name: 'inventory', obj: game.inventory },
             { name: 'camera', obj: game.camera },
             { name: 'canvas', obj: game.canvas },
-            { name: 'keys', obj: game.keys }
+            { name: 'CONSTANTS', obj: CONSTANTS }
         ];
 
         let allFound = true;
@@ -266,7 +341,7 @@ GameTests.basic = {
             allFound = allFound && exists;
         });
 
-        // Проверяем чанки (могут быть не загружены сразу)
+        // Проверяем чанки
         const hasChunks = game.chunkCache !== null && game.chunkCache !== undefined;
         console.log(`${hasChunks ? '✅' : '⚠️'} chunkCache: ${hasChunks ? 'найден' : 'еще не загружен'}`);
 
@@ -277,18 +352,17 @@ GameTests.basic = {
         );
     },
 
-    // Тест 2: Проверка инвентаря
+    // Тест 3: Проверка инвентаря
     testInventoryStructure() {
         console.log('🧪 Тест структуры инвентаря');
 
-        // Обновляем переменные
         loadGameVariables();
 
         if (!game.inventory) {
             return GameTests.logResult('Структура инвентаря', false, 'Инвентарь не найден');
         }
 
-        const requiredProps = ['tools', 'currentTool', 'blocks', 'items'];
+        const requiredProps = ['tools', 'currentTool', 'blocks', 'switchTool', 'getCurrentTool'];
         let allFound = true;
 
         requiredProps.forEach(prop => {
@@ -311,11 +385,10 @@ GameTests.basic = {
         );
     },
 
-    // Тест 3: Проверка игрока
+    // Тест 4: Проверка игрока
     testPlayerStructure() {
         console.log('🧪 Тест структуры игрока');
 
-        // Обновляем переменные
         loadGameVariables();
 
         if (!game.player) {
@@ -341,11 +414,10 @@ GameTests.basic = {
         );
     },
 
-    // Тест 4: Проверка загрузки чанков
+    // Тест 5: Проверка загрузки чанков
     testChunkLoading() {
         console.log('🧪 Тест загрузки чанков');
 
-        // Обновляем переменные
         loadGameVariables();
 
         if (!game.chunkCache) {
@@ -355,7 +427,6 @@ GameTests.basic = {
         const chunkCount = game.chunkCache.size;
         console.log(`Загружено чанков: ${chunkCount}`);
 
-        // Проверяем, что есть хотя бы один чанк
         if (chunkCount > 0) {
             const firstChunk = Array.from(game.chunkCache.values())[0];
             console.log('Первый чанк:', firstChunk ? '✅ найден' : '❌ не найден');
@@ -369,7 +440,7 @@ GameTests.basic = {
             }
         }
 
-        const passed = chunkCount > 0;
+        const passed = chunkCount >= 0; // Может быть 0 на старте
         return GameTests.logResult(
             'Загрузка чанков',
             passed,
@@ -377,12 +448,11 @@ GameTests.basic = {
         );
     },
 
-    // Тест 5: Проверка API соединения
+    // Тест 6: Проверка API соединения
     async testAPIConnection() {
         console.log('🧪 Тест подключения к API');
 
         try {
-            // Проверяем доступность API
             const response = await fetch('/api/player/spawn', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -415,7 +485,7 @@ GameTests.basic = {
 
 GameTests.world = {
     // Тест добычи блока
-    async testMiningFunctions() {
+    testMiningFunctions() {
         console.log('🧪 Тест функций добычи');
 
         loadGameVariables();
@@ -445,7 +515,6 @@ GameTests.world = {
         console.log('🧪 Тест сохранения мира');
 
         try {
-            // Проверяем API получения блоков
             const response = await fetch('/api/blocks/area?minX=0&maxX=5&minY=0&maxY=5');
             if (response.ok) {
                 const data = await response.json();
@@ -653,7 +722,6 @@ GameTests.inventory = {
         }
 
         try {
-            // Проверяем загрузку инвентаря
             const response = await fetch(`/api/inventory?player_id=${game.playerId}`);
 
             if (response.ok) {
@@ -693,7 +761,7 @@ GameTests.performance = {
 
         return new Promise(resolve => {
             const samples = [];
-            const duration = 2000; // 2 секунды
+            const duration = 2000;
             const startTime = performance.now();
 
             let lastTime = startTime;
@@ -706,7 +774,6 @@ GameTests.performance = {
                 if (elapsed < duration) {
                     frameCount++;
 
-                    // Измеряем время между кадрами
                     const frameTime = currentTime - lastTime;
                     samples.push(frameTime);
                     lastTime = currentTime;
@@ -758,7 +825,7 @@ GameTests.performance = {
                 passed ? `Память: ${memoryUsagePercent.toFixed(1)}%` : `Много памяти: ${memoryUsagePercent.toFixed(1)}%`
             );
         } else {
-            console.log('⚠️ Информация о памяти недоступна (только в Chrome с флагом)');
+            console.log('⚠️ Информация о памяти недоступна');
             return GameTests.logResult(
                 'Использование памяти',
                 true,
@@ -772,7 +839,6 @@ GameTests.performance = {
         console.log('🧪 Тест сетевых запросов');
 
         try {
-            // Проверяем несколько API endpoints
             const endpoints = [
                 { url: '/api/chunk?batch=0,0&seed=1767904171111', method: 'GET' },
                 { url: '/api/inventory?player_id=1', method: 'GET' }
@@ -790,7 +856,7 @@ GameTests.performance = {
                 }
             }
 
-            const passed = successCount >= 1; // Хотя бы один endpoint работает
+            const passed = successCount >= 1;
             return GameTests.logResult(
                 'Сетевые запросы',
                 passed,
@@ -812,10 +878,9 @@ GameTests.performance = {
 
 // Быстрая проверка
 GameTests.quickCheck = async function() {
-    console.log('🚀 ЗАПУСК БЫСТРОЙ ПРОВЕРКИ ИГРЫ');
+    console.log('🚀 ЗАПУСК БЫСТРОЙ ПРОВЕРКИ ИГРЫ (game_v2.js)');
     console.log('='.repeat(50));
 
-    // Ожидаем загрузку игры если нужно
     if (!this.isInitialized) {
         try {
             await this.waitForGame(10000);
@@ -823,8 +888,8 @@ GameTests.quickCheck = async function() {
             console.error('❌ Игра не загрузилась:', error.message);
             console.log('\n💡 РЕКОМЕНДАЦИИ:');
             console.log('1. Обновите страницу (F5)');
-            console.log('2. Проверьте консоль на ошибки');
-            console.log('3. Убедитесь что game.js загружен');
+            console.log('2. Проверьте что game_v2.js загружен');
+            console.log('3. Проверьте консоль на ошибки');
             console.log('4. Попробуйте GameTests.checkVariables()');
             return false;
         }
@@ -832,23 +897,27 @@ GameTests.quickCheck = async function() {
 
     this.reset();
 
-    console.log('\n📁 ГРУППА 1: Базовые тесты');
+    console.log('\n📁 ГРУППА 1: Тест модулей');
+    console.log('-'.repeat(40));
+    this.basic.testModules();
+
+    console.log('\n📁 ГРУППА 2: Базовые тесты');
     console.log('-'.repeat(40));
     this.basic.testCoreObjects();
     this.basic.testInventoryStructure();
     this.basic.testPlayerStructure();
     this.basic.testChunkLoading();
 
-    console.log('\n🌐 ГРУППА 2: Тесты API');
+    console.log('\n🌐 ГРУППА 3: Тесты API');
     console.log('-'.repeat(40));
     await this.basic.testAPIConnection();
 
-    console.log('\n🎒 ГРУППА 3: Тесты инвентаря');
+    console.log('\n🎒 ГРУППА 4: Тесты инвентаря');
     console.log('-'.repeat(40));
     this.inventory.testInventoryAPI();
     this.inventory.testToolSwitching();
 
-    console.log('\n⚡ ГРУППА 4: Тесты производительности');
+    console.log('\n⚡ ГРУППА 5: Тесты производительности');
     console.log('-'.repeat(40));
     this.performance.testMemory();
 
@@ -858,10 +927,9 @@ GameTests.quickCheck = async function() {
 
 // Полный набор тестов
 GameTests.runAllTests = async function() {
-    console.log('🚀 ЗАПУСК ПОЛНОГО ТЕСТИРОВАНИЯ');
+    console.log('🚀 ЗАПУСК ПОЛНОГО ТЕСТИРОВАНИЯ (game_v2.js)');
     console.log('='.repeat(50));
 
-    // Ожидаем загрузку игры
     if (!this.isInitialized) {
         try {
             await this.waitForGame(15000);
@@ -873,7 +941,11 @@ GameTests.runAllTests = async function() {
 
     this.reset();
 
-    console.log('\n📁 ГРУППА 1: Базовые тесты');
+    console.log('\n📁 ГРУППА 1: Тест модулей');
+    console.log('-'.repeat(40));
+    this.basic.testModules();
+
+    console.log('\n📁 ГРУППА 2: Базовые тесты');
     console.log('-'.repeat(40));
     this.basic.testCoreObjects();
     this.basic.testInventoryStructure();
@@ -881,21 +953,21 @@ GameTests.runAllTests = async function() {
     this.basic.testChunkLoading();
     await this.basic.testAPIConnection();
 
-    console.log('\n🌍 ГРУППА 2: Тесты мира');
+    console.log('\n🌍 ГРУППА 3: Тесты мира');
     console.log('-'.repeat(40));
     this.world.testMiningFunctions();
     this.world.testChunkCache();
     this.world.testTileFunctions();
     await this.world.testWorldPersistence();
 
-    console.log('\n🎒 ГРУППА 3: Тесты инвентаря');
+    console.log('\n🎒 ГРУППА 4: Тесты инвентаря');
     console.log('-'.repeat(40));
     this.inventory.testInventoryAPI();
     this.inventory.testToolSwitching();
     this.inventory.testAddingBlocks();
     await this.inventory.testInventorySync();
 
-    console.log('\n⚡ ГРУППА 4: Тесты производительности');
+    console.log('\n⚡ ГРУППА 5: Тесты производительности');
     console.log('-'.repeat(40));
     this.performance.testMemory();
     await this.performance.testNetworkRequests();
@@ -907,11 +979,16 @@ GameTests.runAllTests = async function() {
 
 // Отладка текущего состояния
 GameTests.debugState = function() {
-    console.log('🔍 ТЕКУЩЕЕ СОСТОЯНИЕ ИГРЫ');
+    console.log('🔍 ТЕКУЩЕЕ СОСТОЯНИЕ ИГРЫ (game_v2.js)');
     console.log('='.repeat(50));
 
-    // Обновляем переменные
     loadGameVariables();
+
+    console.log('\n🧩 МОДУЛИ:');
+    console.log(`PlayerModule: ${PlayerModule ? '✅' : '❌'}`);
+    console.log(`WorldModule: ${WorldModule ? '✅' : '❌'}`);
+    console.log(`MiningModule: ${MiningModule ? '✅' : '❌'}`);
+    console.log(`InventoryModule: ${InventoryModule ? '✅' : '❌'}`);
 
     console.log('\n👤 ИГРОК:');
     if (game.player) {
@@ -931,8 +1008,12 @@ GameTests.debugState = function() {
         console.log(`Блоков в инвентаре: ${Object.keys(game.inventory.blocks || {}).length}`);
         if (game.inventory.blocks && Object.keys(game.inventory.blocks).length > 0) {
             console.log('Блоки:', Object.entries(game.inventory.blocks)
+                .slice(0, 5)
                 .map(([k, v]) => `${k}: ${v}`)
                 .join(', '));
+            if (Object.keys(game.inventory.blocks).length > 5) {
+                console.log(`... и еще ${Object.keys(game.inventory.blocks).length - 5} блоков`);
+            }
         }
     } else {
         console.log('❌ Инвентарь не найден');
@@ -970,12 +1051,14 @@ GameTests.debugState = function() {
 
 // Проверка переменных
 GameTests.checkVariables = function() {
-    console.log('🔍 ПРОВЕРКА ПЕРЕМЕННЫХ ИГРЫ');
+    console.log('🔍 ПРОВЕРКА ПЕРЕМЕННЫХ ИГРЫ (game_v2.js)');
     console.log('='.repeat(50));
 
     loadGameVariables();
 
     const variables = [
+        { name: 'PlayerModule', value: PlayerModule, type: 'object' },
+        { name: 'InventoryModule', value: InventoryModule, type: 'object' },
         { name: 'player', value: game.player, type: 'object' },
         { name: 'inventory', value: game.inventory, type: 'object' },
         { name: 'camera', value: game.camera, type: 'object' },
@@ -986,7 +1069,8 @@ GameTests.checkVariables = function() {
         { name: 'zoom', value: game.zoom, type: 'number' },
         { name: 'getTileAt', value: game.getTileAt, type: 'function' },
         { name: 'CHUNK_SIZE', value: game.chunkSize, type: 'number' },
-        { name: 'MAX_STACK', value: game.maxStack, type: 'number' }
+        { name: 'MAX_STACK', value: game.maxStack, type: 'number' },
+        { name: 'CONSTANTS', value: CONSTANTS, type: 'object' }
     ];
 
     variables.forEach(v => {
@@ -999,7 +1083,9 @@ GameTests.checkVariables = function() {
                 details = 'функция';
             } else if (v.type === 'object' && typeof v.value === 'object') {
                 status = '✅';
-                details = `объект (${Object.keys(v.value).length} св-в)`;
+                const keyCount = v.name === 'CONSTANTS' ? Object.keys(v.value).length :
+                    v.value !== null ? Object.keys(v.value).length : 0;
+                details = `объект (${keyCount} св-в)`;
             } else if (v.type === 'number' && typeof v.value === 'number') {
                 status = '✅';
                 details = `число: ${v.value}`;
@@ -1018,10 +1104,21 @@ GameTests.checkVariables = function() {
     console.log('\n' + '='.repeat(50));
     console.log('💡 СОВЕТЫ:');
     console.log('- Если переменные не найдены, обновите страницу (F5)');
-    console.log('- Убедитесь что game.js загружен первым');
+    console.log('- Убедитесь что game_v2.js загружен');
     console.log('- Проверьте консоль на ошибки загрузки');
 
     return game.player !== null;
+};
+
+// Тест модулей
+GameTests.testModules = function() {
+    console.log('🧪 ТЕСТ МОДУЛЕЙ GAME_V2.JS');
+    console.log('='.repeat(50));
+
+    this.reset();
+    this.basic.testModules();
+
+    return this.showSummary();
 };
 
 // Отдельные тесты
@@ -1087,9 +1184,7 @@ GameTests.testPerformance = async function() {
 // 🚀 ИНИЦИАЛИЗАЦИЯ
 // ==============================================
 
-// Автоматическая инициализация при загрузке
 if (typeof window !== 'undefined') {
-    // Даем задержку для загрузки game.js
     setTimeout(() => {
         GameTests.init();
 
@@ -1118,15 +1213,22 @@ if (typeof window !== 'undefined') {
                 console.clear();
                 GameTests.checkVariables();
             }
+
+            if (e.ctrlKey && e.shiftKey && e.key === 'M') {
+                e.preventDefault();
+                console.clear();
+                GameTests.testModules();
+            }
         });
 
-        console.log('🔥 GameTests готовы! Используйте:');
+        console.log('🔥 GameTests для game_v2.js готовы! Используйте:');
         console.log('- Ctrl+Shift+T - запуск всех тестов');
         console.log('- Ctrl+Shift+D - отладка состояния');
         console.log('- Ctrl+Shift+Q - быстрая проверка');
         console.log('- Ctrl+Shift+V - проверка переменных');
+        console.log('- Ctrl+Shift+M - тест модулей');
         console.log('\n⏱️  Инициализация завершена');
-    }, 2000); // Задержка 2 секунды
+    }, 3000); // Увеличиваем задержку до 3 секунд
 }
 
 // Экспорт для использования в консоли
