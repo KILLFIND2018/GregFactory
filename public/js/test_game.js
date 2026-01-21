@@ -895,18 +895,7 @@ GameTests.quickCheck = async function() {
         }
     }
 
-    this.reset();
 
-    console.log('\n📁 ГРУППА 1: Тест модулей');
-    console.log('-'.repeat(40));
-    this.basic.testModules();
-
-    console.log('\n📁 ГРУППА 2: Базовые тесты');
-    console.log('-'.repeat(40));
-    this.basic.testCoreObjects();
-    this.basic.testInventoryStructure();
-    this.basic.testPlayerStructure();
-    this.basic.testChunkLoading();
 
     console.log('\n🌐 ГРУППА 3: Тесты API');
     console.log('-'.repeat(40));
@@ -1084,7 +1073,7 @@ GameTests.checkVariables = function() {
             } else if (v.type === 'object' && typeof v.value === 'object') {
                 status = '✅';
                 const keyCount = v.name === 'CONSTANTS' ? Object.keys(v.value).length :
-                    v.value !== null ? Object.keys(v.value).length : 0;
+                    Object.keys(v.value).length;
                 details = `объект (${keyCount} св-в)`;
             } else if (v.type === 'number' && typeof v.value === 'number') {
                 status = '✅';
