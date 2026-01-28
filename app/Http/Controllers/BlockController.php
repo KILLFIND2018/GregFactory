@@ -298,6 +298,17 @@ class BlockController extends Controller
             // Получаем ПОЛНЫЙ тайл ДО изменений
             $originalTile = Block::getTileData($x, $y, $worldId);
 
+            // === НОРМАЛИЗАЦИЯ ТАЙЛА ===
+            $originalTile = array_merge([
+                'b' => null,
+                'l' => null,
+                'la' => 0,
+                'lm' => 0,
+                'o' => null,
+                's' => null,
+                'g' => null,
+            ], $originalTile);
+
             // Логируем для отладки
             \Log::info("Mining block", [
                 'x' => $x,
@@ -306,6 +317,13 @@ class BlockController extends Controller
                 'blockType' => $blockType,
                 'originalTile' => $originalTile
             ]);
+
+            // === ВОССТАНОВЛЕНИЕ ДЕФОЛТНЫХ СЛОЁВ ===
+            if ($originalTile['g'] === null && $blockType === 'grass') {
+                $originalTile['g'] = 'dirt';
+            }
+
+
 
             // Сохраняем ВСЕ важные данные из оригинального тайла
             $preservedData = [
@@ -424,6 +442,18 @@ class BlockController extends Controller
             if ($dropCount > 0 && $isFinite) {
                 PlayerInventory::addItem($playerId, $itemType, $blockType, $dropCount);
             }
+
+            // === СОХРАНЕНИЕ ИТОГОВОГО ТАЙЛА ===
+
+            // Получаем текущий тайл (из БД или пустой)
+            $currentTile = Block::getTileData($x, $y, $worldId);
+
+            // Мержим с актуальными слоями после добычи
+            $finalTile = $this->mergePreservedData($currentTile, $preservedData);
+
+            // Сохраняем ВСЕ слои тайла в БД
+            Block::saveTile($x, $y, $finalTile, $worldId);
+
 
             DB::commit();
 
