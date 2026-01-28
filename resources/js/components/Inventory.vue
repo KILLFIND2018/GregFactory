@@ -1,1004 +1,585 @@
 <template>
-  <div
-      v-if="isVisible"
-      class="inventory-wrapper"
-      :class="{ 'compact-mode': isCompact }"
-      @click.stop
-  >
-    <!-- Основной инвентарь -->
-    <div class="inventory-main">
-      <!-- Заголовок -->
-      <div class="inventory-header">
-        <div class="header-title">
-          <span class="title-icon">🎒</span>
-          Инвентарь
-          <span v-if="playerName" class="player-name">• {{ playerName }}</span>
-        </div>
-        <div class="header-controls">
-          <button
-              class="btn-control"
-              :title="isCompact ? 'Развернуть' : 'Свернуть'"
-              @click="toggleCompact"
-          >
-            {{ isCompact ? '↗' : '↙' }}
-          </button>
-          <button
-              class="btn-control"
-              title="Обновить"
-              @click="refresh"
-              :disabled="isLoading"
-          >
-            <span class="refresh-icon" :class="{ 'spinning': isLoading }">↻</span>
-          </button>
-          <button
-              class="btn-control btn-close"
-              title="Закрыть (Tab)"
-              @click="hide"
-          >
-            ✕
-          </button>
-        </div>
-      </div>
+    <div class="game-ui" @contextmenu.prevent>
+        <transition name="mc-fade">
+            <div v-if="isOpen" class="inventory-overlay">
+                <div class="mc-window">
+                    <div class="mc-title">Инвентарь</div>
 
-      <!-- Быстрые инструменты -->
-      <div v-if="!isCompact" class="quick-tools">
-        <div class="section-title">
-          <span class="section-icon">🛠️</span>
-          Инструменты
-        </div>
-        <div class="tools-grid">
-          <div
-              v-for="tool in sortedTools"
-              :key="tool.id"
-              class="tool-item"
-              :class="{
-              'active': activeToolId === tool.id,
-              'broken': tool.durability <= 0
-            }"
-              @click="switchTool(tool.id)"
-              :title="getToolTooltip(tool)"
-          >
-            <div class="tool-icon">
-              {{ getToolEmoji(tool.id) }}
-            </div>
-            <div class="tool-info">
-              <div class="tool-name">{{ tool.name }}</div>
-              <div v-if="tool.durability !== Infinity" class="tool-durability">
-                <div class="durability-bar">
-                  <div
-                      class="durability-fill"
-                      :style="{ width: `${(tool.durability / tool.maxDurability) * 100}%` }"
-                      :class="getDurabilityClass(tool)"
-                  ></div>
+                    <!-- Основная сетка инвентаря (9-44 слоты) -->
+                    <div class="mc-grid main-grid">
+                        <div v-for="slotIdx in mainSlots" :key="slotIdx" class="mc-slot"
+                             @dragover.prevent @drop="handleDrop(slotIdx)"
+                             @mouseenter="showTooltip($event, getItemAt(slotIdx))" @mouseleave="hideTooltip">
+
+                            <div v-if="getItemAt(slotIdx)" class="item-icon-wrapper" draggable="true"
+                                 @dragstart="handleDragStart(slotIdx)">
+                                <div class="item-color-block" :style="getItemStyle(getItemAt(slotIdx))">
+                                    {{ getItemLabel(getItemAt(slotIdx)) }}
+                                </div>
+                                <span v-if="getItemAt(slotIdx).quantity > 1" class="item-count">
+                                    {{ getItemAt(slotIdx).quantity }}
+                                </span>
+                                <div v-if="getItemAt(slotIdx).item_type === 'tool'" class="durability-bar">
+                                    <div class="durability-fill"
+                                         :style="{ width: getDurabilityPercent(getItemAt(slotIdx)) + '%' }"></div>
+                                </div>
+                            </div>
+                            <span v-else class="slot-number">{{ slotIdx }}</span>
+                        </div>
+                    </div>
+
+                    <!-- Хотбар (0-8 слоты) -->
+                    <div class="hotbar-label">Хотбар</div>
+                    <div class="mc-grid hotbar-inner-grid">
+                        <div v-for="slotIdx in hotbarSlots" :key="slotIdx" class="mc-slot"
+                             @dragover.prevent @drop="handleDrop(slotIdx)"
+                             @mouseenter="showTooltip($event, getItemAt(slotIdx))" @mouseleave="hideTooltip">
+
+                            <div v-if="getItemAt(slotIdx)" class="item-icon-wrapper" draggable="true"
+                                 @dragstart="handleDragStart(slotIdx)">
+                                <div class="item-color-block" :style="getItemStyle(getItemAt(slotIdx))">
+                                    {{ getItemLabel(getItemAt(slotIdx)) }}
+                                </div>
+                                <span v-if="getItemAt(slotIdx).quantity > 1" class="item-count">
+                                    {{ getItemAt(slotIdx).quantity }}
+                                </span>
+                                <div v-if="getItemAt(slotIdx).item_type === 'tool'" class="durability-bar">
+                                    <div class="durability-fill"
+                                         :style="{ width: getDurabilityPercent(getItemAt(slotIdx)) + '%' }"></div>
+                                </div>
+                            </div>
+                            <span v-else class="slot-number">{{ slotIdx + 1 }}</span> <!-- 1-9 вместо 0-8 -->
+                        </div>
+                    </div>
                 </div>
-                <span class="durability-text">
-                  {{ tool.durability }}/{{ tool.maxDurability }}
+            </div>
+        </transition>
+
+        <!-- Хотбар в HUD -->
+        <div class="hud-hotbar-container" v-show="!isOpen">
+            <div class="mc-grid hotbar-hud">
+                <div v-for="(slotIdx, index) in hotbarSlots" :key="'hud-'+slotIdx"
+                     class="mc-slot" :class="{
+                 'active-slot': currentHotbarSlot === index,
+                 'has-tool': getItemAt(slotIdx) && getItemAt(slotIdx).item_type === 'tool'
+             }">
+                    <div v-if="getItemAt(slotIdx)" class="item-icon-wrapper">
+                        <div class="item-color-block" :style="getItemStyle(getItemAt(slotIdx))">
+                            {{ getItemLabel(getItemAt(slotIdx)) }}
+                        </div>
+                        <span v-if="getItemAt(slotIdx).quantity > 1" class="item-count">
+                    {{ getItemAt(slotIdx).quantity }}
                 </span>
-              </div>
+                        <div v-if="getItemAt(slotIdx).item_type === 'tool'" class="durability-bar">
+                            <div class="durability-fill"
+                                 :style="{ width: getDurabilityPercent(getItemAt(slotIdx)) + '%' }"></div>
+                        </div>
+                    </div>
+                    <span v-else class="slot-number-hud">{{ index + 1 }}</span>
+                </div>
             </div>
-            <div v-if="tool.hotkey" class="tool-hotkey">
-              {{ tool.hotkey }}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Ресурсы -->
-      <div v-if="!isCompact" class="resources-section">
-        <div class="section-header">
-          <div class="section-title">
-            <span class="section-icon">📦</span>
-            Ресурсы ({{ filteredResources.length }})
-          </div>
-          <div class="section-controls">
-            <div class="search-box">
-              <input
-                  v-model="searchQuery"
-                  type="text"
-                  placeholder="Поиск..."
-                  class="search-input"
-                  @keyup.esc="searchQuery = ''"
-              />
-              <span class="search-icon">🔍</span>
-            </div>
-          </div>
         </div>
 
-        <div class="resources-grid">
-          <div
-              v-for="item in filteredResources"
-              :key="item.id"
-              class="resource-item"
-              :class="{ 'selected': selectedItemId === item.id }"
-              @click="selectItem(item)"
-              @dblclick="useItem(item)"
-              :title="getItemTooltip(item)"
-          >
-            <div class="resource-icon" :style="getItemStyle(item)">
-              <span v-if="item.count > 1" class="stack-count">
-                {{ formatCount(item.count) }}
-              </span>
-              <span v-if="item.isPersistent" class="persistent-badge" title="Персистентный">∞</span>
-            </div>
-            <div class="resource-info">
-              <div class="resource-name">{{ item.name }}</div>
-              <div class="resource-meta">
-                <span class="resource-type">{{ item.type }}</span>
-                <span class="resource-count">{{ item.count }} шт</span>
-              </div>
-            </div>
-            <div v-if="item.maxStack > 1" class="stack-bar">
-              <div
-                  class="stack-fill"
-                  :style="{ width: `${(item.count / item.maxStack) * 100}%` }"
-              ></div>
-            </div>
-          </div>
-        </div>
 
-        <!-- Пустой инвентарь -->
-        <div v-if="filteredResources.length === 0" class="empty-inventory">
-          <div class="empty-icon">📭</div>
-          <div class="empty-text">
-            {{ searchQuery ? 'Ничего не найдено' : 'Инвентарь пуст' }}
-          </div>
-          <button
-              v-if="searchQuery"
-              class="btn-clear-search"
-              @click="searchQuery = ''"
-          >
-            Очистить поиск
-          </button>
+
+        <!-- Тултип -->
+        <div v-if="tooltip.visible && tooltip.item" class="mc-tooltip"
+             :style="{ left: tooltip.x + 'px', top: tooltip.y + 'px' }">
+            <div class="tooltip-name">{{ getItemDisplayName(tooltip.item) }}</div>
+            <div class="tooltip-id">ID: {{ tooltip.item.item_id }}</div>
+            <div class="tooltip-type">Тип: {{ getItemTypeName(tooltip.item.item_type) }}</div>
+            <div v-if="tooltip.item.quantity > 1" class="tooltip-quantity">
+                Количество: {{ tooltip.item.quantity }}
+            </div>
+            <div v-if="tooltip.item.item_type === 'tool'" class="tooltip-durability">
+                Прочность: {{ tooltip.item.durability || 0 }}/{{ tooltip.item.max_durability || 60 }}
+            </div>
         </div>
-      </div>
     </div>
-
-    <!-- Уведомления -->
-    <div class="notifications">
-      <transition-group name="notification">
-        <div
-            v-for="notification in notifications"
-            :key="notification.id"
-            class="notification"
-            :class="`notification-${notification.type}`"
-            @click="removeNotification(notification.id)"
-        >
-          <span class="notification-icon">{{ getNotificationIcon(notification.type) }}</span>
-          <span class="notification-text">{{ notification.message }}</span>
-          <button class="notification-close">×</button>
-        </div>
-      </transition-group>
-    </div>
-  </div>
 </template>
 
 <script setup>
-import {computed, onMounted, onUnmounted, ref} from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue';
+import { shallowRef } from 'vue';
 
-// ========== СОСТОЯНИЕ ==========
-const isVisible = ref(false)
-const isCompact = ref(false)
-const isLoading = ref(false)
-const searchQuery = ref('')
-const selectedItemId = ref(null)
-const notifications = ref([])
+const inventory = shallowRef([]);
 
-// Данные инвентаря
-const playerId = ref(null)
-const playerName = ref('')
-const blocks = ref({})
-const tools = ref({})
-const activeToolId = ref('hand')
+// Состояние
+const isOpen = ref(false);
+const activeSlot = ref(0); // 0-8
 
-// Конфигурация
-const TOOL_CONFIG = {
-  hand: { name: 'Рука', emoji: '✊', hotkey: '1', maxDurability: Infinity },
-  axe: { name: 'Топор', emoji: '🪓', hotkey: '2', maxDurability: 60 },
-  shovel: { name: 'Лопата', emoji: '🪣', hotkey: '3', maxDurability: 60 },
-  pickaxe: { name: 'Кирка', emoji: '⛏️', hotkey: '4', maxDurability: 60 }
-}
+const draggedSlotIndex = ref(null);
 
-const RESOURCE_CONFIG = {
-  stone: { name: 'Камень', type: 'Блок', color: '#808080', persistent: true },
-  dirt: { name: 'Земля', type: 'Блок', color: '#8B7355' },
-  sand: { name: 'Песок', type: 'Блок', color: '#d2b48c' },
-  gravel: { name: 'Гравий', type: 'Блок', color: '#8d8d8d' },
-  grass: { name: 'Трава', type: 'Блок', color: '#567d46' },
-  wood: { name: 'Дерево', type: 'Блок', color: '#8B4513' },
-  // ... добавьте остальные ресурсы из game.js
-}
+const mainSlots = Array.from({ length: 36 }, (_, i) => i + 9); // 9-44
+const hotbarSlots = Array.from({ length: 9 }, (_, i) => i);    // 0-8
 
-// ========== ВЫЧИСЛЯЕМЫЕ СВОЙСТВА ==========
-const sortedTools = computed(() => {
-  return Object.entries(tools.value)
-      .map(([id, data]) => ({
-        id,
-        name: TOOL_CONFIG[id]?.name || id,
-        durability: data.durability || TOOL_CONFIG[id]?.maxDurability || Infinity,
-        maxDurability: TOOL_CONFIG[id]?.maxDurability || Infinity,
-        hotkey: TOOL_CONFIG[id]?.hotkey
-      }))
-      .sort((a, b) => (a.hotkey || '').localeCompare(b.hotkey || ''))
-})
+const currentHotbarSlot = ref(0);
+const currentTool = ref('hand');
 
-const resourcesList = computed(() => {
-  return Object.entries(blocks.value)
-      .filter(([_, count]) => count > 0)
-      .map(([id, count]) => {
-        const config = RESOURCE_CONFIG[id] || {
-          name: formatName(id),
-          type: 'Ресурс',
-          color: '#888888'
-        }
-        const maxStack = config.persistent ? 1 : 64
 
-        return {
-          id,
-          name: config.name,
-          type: config.type,
-          count,
-          color: config.color,
-          maxStack,
-          isPersistent: config.persistent || false,
-          isStackFull: count >= maxStack
-        }
-      })
-})
 
-const filteredResources = computed(() => {
-  if (!searchQuery.value) return resourcesList.value
+const tooltip = reactive({
+    visible: false,
+    x: 0,
+    y: 0,
+    item: null
+});
 
-  const query = searchQuery.value.toLowerCase()
-  return resourcesList.value.filter(item =>
-      item.name.toLowerCase().includes(query) ||
-      item.type.toLowerCase().includes(query) ||
-      item.id.toLowerCase().includes(query)
-  )
-})
+const itemsBySlot = computed(() => {
+    const map = Object.create(null);
 
-// ========== МЕТОДЫ ==========
-const formatName = (id) => {
-  return id
-      .replace(/_/g, ' ')
-      .replace(/\b\w/g, l => l.toUpperCase())
-}
+    for (const item of inventory.value) {
+        map[item.slot_index] = item;
+    }
 
-const formatCount = (count) => {
-  if (count >= 1000000) return `${(count / 1000000).toFixed(1)}M`
-  if (count >= 1000) return `${(count / 1000).toFixed(1)}K`
-  return count.toString()
-}
+    return map;
+});
 
-const getToolEmoji = (toolId) => {
-  return TOOL_CONFIG[toolId]?.emoji || '🛠️'
-}
 
-const getToolTooltip = (tool) => {
-  if (tool.durability === Infinity) {
-    return `${tool.name}\nБесконечная прочность`
-  }
-  return `${tool.name}\nПрочность: ${tool.durability}/${tool.maxDurability}`
-}
+// Получение предмета в конкретном слоте
+const getItemAt = (slotIndex) => {
+    return itemsBySlot.value[slotIndex] || null;
+};
 
-const getItemTooltip = (item) => {
-  return `${item.name}\nТип: ${item.type}\nКоличество: ${item.count}`
-}
 
+// Метка для отображения в цветном блоке
+const getItemLabel = (item) => {
+    const id = item.item_id;
+    if (id.includes('pickaxe')) return '⛏️';
+    if (id.includes('axe')) return '🪓';
+    if (id.includes('shovel')) return '🪚';
+    if (id === 'dirt') return '🗿';
+    if (id === 'grass') return '🌿';
+    if (id === 'stone') return '🪨';
+    return id.substring(0, 2).toUpperCase();
+};
+
+// Отображаемое имя для тултипа
+const getItemDisplayName = (item) => {
+    const names = {
+        'wooden_pickaxe': 'Деревянная кирка',
+        'wooden_axe': 'Деревянный топор',
+        'wooden_shovel': 'Деревянная лопата',
+        'dirt': 'Земля',
+        'grass': 'Трава',
+        'stone': 'Камень'
+    };
+    return names[item.item_id] || item.item_id.replace('_', ' ');
+};
+
+// Название типа предмета
+const getItemTypeName = (type) => {
+    const typeNames = {
+        'tool': 'Инструмент',
+        'block': 'Блок',
+        'item': 'Предмет'
+    };
+    return typeNames[type] || type;
+};
+
+// Прочность в процентах
+const getDurabilityPercent = (item) => {
+    if (item.item_type !== 'tool') return 0;
+    const max = item.max_durability || 60;
+    const current = item.durability || max;
+    return Math.round((current / max) * 100);
+};
+
+// ГЕНЕРАЦИЯ ЦВЕТА И СТИЛЯ
 const getItemStyle = (item) => {
-  return {
-    backgroundColor: item.color
-  }
-}
+    const colors = {
+        // Инструменты
+        'wooden_pickaxe': { bg: '#8B4513', text: '#FFF' },
+        'wooden_axe': { bg: '#A0522D', text: '#FFF' },
+        'wooden_shovel': { bg: '#D2691E', text: '#FFF' },
+        // Блоки
+        'dirt': { bg: '#553311', text: '#FFF' },
+        'grass': { bg: '#228B22', text: '#FFF' },
+        'stone': { bg: '#808080', text: '#FFF' },
+        'sand': { bg: '#F4E209', text: '#333' },
+        'gravel': { bg: '#8D8D8D', text: '#FFF' },
+        'clay': { bg: '#A1887F', text: '#FFF' },
+        'beach_sand': { bg: '#F0E68C', text: '#333' }
+    };
 
-const getDurabilityClass = (tool) => {
-  const percent = (tool.durability / tool.maxDurability) * 100
-  if (percent > 70) return 'high'
-  if (percent > 30) return 'medium'
-  return 'low'
-}
+    const style = colors[item.item_id] || { bg: '#333', text: '#FFF' };
 
-const getNotificationIcon = (type) => {
-  const icons = {
-    success: '✅',
-    error: '❌',
-    warning: '⚠️',
-    info: 'ℹ️'
-  }
-  return icons[type] || '📢'
-}
+    return {
+        backgroundColor: style.bg,
+        border: '2px solid rgba(255,255,255,0.3)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        color: style.text,
+        fontSize: '14px',
+        fontWeight: 'bold',
+        width: '100%',
+        height: '100%',
+        borderRadius: '4px'
+    };
+};
 
-// ========== ДЕЙСТВИЯ ==========
+// Перетаскивание
+const handleDragStart = (slotIdx) => {
+    draggedSlotIndex.value = slotIdx;
+    hideTooltip();
+};
+
+// В методе handleDrop
+const handleDrop = async (targetSlotIdx) => {
+    const sourceIdx = draggedSlotIndex.value;
+
+    if (sourceIdx === null || sourceIdx === targetSlotIdx) return;
+
+
+
+
+    try {
+        if (!window.InventoryManager?.optimisticMove) {
+            console.error('optimisticMove not found');
+            return;
+        }
+
+        const result = await window.InventoryManager.optimisticMove(
+            sourceIdx,
+            targetSlotIdx
+        );
+
+        if (!result.success) {
+            console.warn('Ошибка перемещения:', result.error);
+            // UI уже откатился внутри optimisticMove
+        }
+    } finally {
+        draggedSlotIndex.value = null;
+    }
+};
+
+
+// Тултип
+const showTooltip = (e, item) => {
+    if (!item) return;
+    tooltip.item = item;
+    tooltip.x = e.clientX + 15;
+    tooltip.y = e.clientY - 15;
+    tooltip.visible = true;
+};
+
+const hideTooltip = () => {
+    tooltip.visible = false;
+};
+
+
+
+// Обновление данных из game_v2.js
+const updateData = (data) => {
+    if (data?.inventory) {
+        inventory.value = data.inventory;
+    }
+    if (data?.currentHotbarSlot !== undefined) {
+        currentHotbarSlot.value = data.currentHotbarSlot;
+    }
+    if (data?.currentTool) {
+        currentTool.value = data.currentTool;
+    }
+};
+
+
+// Показать/скрыть инвентарь
 const show = () => {
-  isVisible.value = true
-  refresh()
-}
+    isOpen.value = true;
+};
 
 const hide = () => {
-  isVisible.value = false
-  selectedItemId.value = null
-}
+    isOpen.value = false;
+};
 
-const toggleCompact = () => {
-  isCompact.value = !isCompact.value
-}
+const isVisible = () => {
+    return isOpen.value;
+};
 
-const refresh = async () => {
-  if (!playerId.value || isLoading.value) return
+// Уведомления
+const addNotification = (text, type = 'info') => {
+    console.log(`[VueInventory] ${type}: ${text}`);
+    // Можно добавить визуальные уведомления
+};
 
-  isLoading.value = true
+// Экспортируем методы глобально для game_v2.js
+window.VueInventory = {
+    updateData, // 🔥 ВОТ ЭТО ГЛАВНОЕ
+    show,
+    hide,
+    isVisible,
+    addNotification
+};
 
-  try {
-    const response = await fetch(`/api/inventory?player_id=${playerId.value}`)
-    const data = await response.json()
-
-    if (data.success) {
-      blocks.value = data.inventory?.blocks || {}
-      tools.value = data.inventory?.tools || {}
-      activeToolId.value = data.inventory?.current_tool || 'hand'
+// Обработка горячих клавиш
+const onKeyDown = (e) => {
+    if (e.key === 'Tab') {
+        e.preventDefault();
+        isOpen.value = !isOpen.value;
+        if (isOpen.value) {
+            document.exitPointerLock();
+        }
     }
-  } catch (error) {
-    console.error('Ошибка загрузки инвентаря:', error)
-    addNotification('Ошибка загрузки инвентаря', 'error')
-  } finally {
-    isLoading.value = false
-  }
-}
+    if (!isOpen.value && e.key >= '1' && e.key <= '9') {
+        activeSlot.value = parseInt(e.key) - 1;
+    }
+};
 
-const switchTool = async (toolId) => {
-  if (!playerId.value) return
+// Глобальное обновление инвентаря (для вызова из game_v2.js)
 
-  // Обновляем локально
-  activeToolId.value = toolId
-
-  // Обновляем в игре
-  if (window.gameInventory?.switchTool) {
-    window.gameInventory.switchTool(toolId)
-  }
-
-  // Отправляем на сервер
-  try {
-    await fetch('/api/inventory/set-tool', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        player_id: playerId.value,
-        tool_id: toolId
-      })
-    })
-
-    addNotification(`Инструмент: ${TOOL_CONFIG[toolId]?.name || toolId}`, 'info')
-  } catch (error) {
-    console.error('Ошибка смены инструмента:', error)
-  }
-}
-
-const selectItem = (item) => {
-  selectedItemId.value = selectedItemId.value === item.id ? null : item.id
-}
-
-const useItem = (item) => {
-  console.log('Использовать:', item)
-  addNotification(`Используется: ${item.name}`, 'info')
-}
-
-const addNotification = (message, type = 'info') => {
-  const id = Date.now() + Math.random()
-  notifications.value.push({ id, message, type })
-
-  // Автоудаление через 3 секунды
-  setTimeout(() => {
-    removeNotification(id)
-  }, 3000)
-}
-
-const removeNotification = (id) => {
-  const index = notifications.value.findIndex(n => n.id === id)
-  if (index !== -1) {
-    notifications.value.splice(index, 1)
-  }
-}
-
-// ========== ЖИЗНЕННЫЙ ЦИКЛ ==========
 onMounted(() => {
-  // Глобальные события
-  window.addEventListener('inventory-update', handleInventoryUpdate)
-  window.addEventListener('toggle-inventory', toggleInventory)
-  window.addEventListener('player-spawned', handlePlayerSpawned)
 
-  // Горячие клавиши
-  window.addEventListener('keydown', handleKeydown)
 
-  // Периодическое обновление
-    // Сохраняем для очистки
-  window.inventoryInterval = setInterval(() => {
-      if (isVisible.value && playerId.value) {
-          refresh()
-      }
-  }, 10000)
-})
+
+    // Слушаем клавиши
+    window.addEventListener('keydown', onKeyDown);
+
+
+});
 
 onUnmounted(() => {
-  window.removeEventListener('inventory-update', handleInventoryUpdate)
-  window.removeEventListener('toggle-inventory', toggleInventory)
-  window.removeEventListener('player-spawned', handlePlayerSpawned)
-  window.removeEventListener('keydown', handleKeydown)
+    window.removeEventListener('keydown', onKeyDown);
+});
 
-  if (window.inventoryInterval) {
-    clearInterval(window.inventoryInterval)
-  }
-})
-
-// ========== ОБРАБОТЧИКИ СОБЫТИЙ ==========
-
-const handleInventoryUpdate = (event) => {
-  console.log('Vue: Получено обновление инвентаря:', event.detail);
-  if (event.detail) {
-    if (event.detail.blocks) {
-      console.log('Vue: Блоки до:', blocks.value);
-      blocks.value = event.detail.blocks;
-      console.log('Vue: Блоки после:', blocks.value);
-    }
-    if (event.detail.blocks) blocks.value = event.detail.blocks
-    if (event.detail.tools) tools.value = event.detail.tools
-    if (event.detail.currentTool) activeToolId.value = event.detail.currentTool
-  }
-}
-
-const toggleInventory = () => {
-  if (isVisible.value) {
-    hide()
-  } else {
-    show()
-  }
-}
-
-const handlePlayerSpawned = (event) => {
-  playerId.value = event.detail?.id || window.playerId
-  playerName.value = event.detail?.name || 'Игрок'
-  refresh()
-}
-
-const handleKeydown = (event) => {
-  // Tab для открытия/закрытия
-  if (event.key === 'Tab') {
-    event.preventDefault()
-    toggleInventory()
-  }
-
-  // Escape для закрытия
-  if (event.key === 'Escape' && isVisible.value) {
-    event.preventDefault()
-    hide()
-  }
-
-  // Быстрое переключение инструментов
-  if (event.key === '1') switchTool('hand')
-  if (event.key === '2') switchTool('axe')
-  if (event.key === '3') switchTool('shovel')
-  if (event.key === '4') switchTool('pickaxe')
-}
-
-// Экспортируем методы для доступа из game.js
-defineExpose({
-  show,
-  hide,
-  refresh,
-  addNotification,
-  updateData: (data) => {
-    if (data.blocks) blocks.value = data.blocks
-    if (data.tools) tools.value = data.tools
-    if (data.currentTool) activeToolId.value = data.currentTool
-  }
-})
+defineExpose({  updateData });
 </script>
 
 <style scoped>
-.inventory-wrapper {
-  position: fixed;
-  top: 50%;
-  left: 20%;
-  transform: translate(-50%, -50%);
-  z-index: 10000;
-  background: rgba(0, 0, 0, 0.9);
-  border-radius: 12px;
-  border: 2px solid #FFD700;
-  box-shadow: 0 0 50px rgba(0, 0, 0, 0.8);
-  overflow: hidden;
-  min-width: 300px;
-  font-family: 'Arial', sans-serif;
+/* Основной контейнер UI */
+.game-ui {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    pointer-events: none;
+    z-index: 9999;
+    font-family: 'Minecraft', sans-serif;
 }
 
-.compact-mode {
-  width: 350px;
+.inventory-overlay {
+    pointer-events: all;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    justify-content: center;
+    align-items: center;
 }
 
-.inventory-main {
-  padding: 20px;
+/* Окно в стиле Minecraft */
+.mc-window {
+    background: #c6c6c6;
+    border: 4px solid #373737;
+    box-shadow: inset -4px -4px #555555, inset 4px 4px #ffffff;
+    padding: 16px;
+    image-rendering: pixelated;
+    min-width: 450px;
 }
 
-/* Заголовок */
-.inventory-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid rgba(255, 215, 0, 0.3);
+.mc-title {
+    color: #404040;
+    margin-bottom: 12px;
+    font-size: 18px;
+    text-align: center;
+    text-shadow: 2px 2px 0px #fff;
 }
 
-.header-title {
-  color: #FFD700;
-  font-size: 20px;
-  font-weight: bold;
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.hotbar-label {
+    text-align: center;
+    margin: 10px 0 5px 0;
+    color: #404040;
+    font-size: 16px;
 }
 
-.title-icon {
-  font-size: 24px;
+/* Сетки */
+.mc-grid {
+    display: grid;
+    grid-template-columns: repeat(9, 44px);
+    gap: 2px;
 }
 
-.player-name {
-  color: #4FC3F7;
-  font-size: 14px;
-  font-weight: normal;
+.main-grid {
+    margin-bottom: 14px;
 }
 
-.header-controls {
-  display: flex;
-  gap: 8px;
+/* Слот */
+.mc-slot {
+    width: 44px;
+    height: 44px;
+    background: #8b8b8b;
+    border: 2px solid #373737;
+    box-shadow: inset 3px 3px rgba(0,0,0,0.5), inset -3px -3px rgba(255,255,255,0.2);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    position: relative;
+    cursor: pointer;
 }
 
-.btn-control {
-  background: rgba(255, 255, 255, 0.1);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  color: white;
-  width: 32px;
-  height: 32px;
-  border-radius: 6px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 14px;
-  transition: all 0.2s;
+.mc-slot:hover {
+    background: #bebebe;
+    transform: scale(1.05);
 }
 
-.btn-control:hover {
-  background: rgba(255, 255, 255, 0.2);
-  transform: translateY(-1px);
+/* Активный слот в HUD */
+.active-slot {
+    outline: 4px solid #ffffff !important;
+    box-shadow: 0 0 10px #ffffff !important;
+    z-index: 10;
+    transform: scale(1.05);
 }
 
-.btn-close:hover {
-  background: rgba(244, 67, 54, 0.2);
-  border-color: #F44336;
+.has-tool {
+    border-color: #ffd700 !important;
 }
 
-.refresh-icon.spinning {
-  animation: spin 1s linear infinite;
+/* Номера слотов */
+.slot-number {
+    color: rgba(255, 255, 255, 0.3);
+    font-size: 10px;
+    position: absolute;
+    bottom: 2px;
+    right: 2px;
 }
 
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+.slot-number-hud {
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 12px;
+    position: absolute;
+    bottom: 2px;
+    right: 2px;
 }
 
-/* Инструменты */
-.quick-tools {
-  margin-bottom: 20px;
-  padding-bottom: 20px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+/* Предметы */
+.item-icon-wrapper {
+    width: 36px;
+    height: 36px;
+    cursor: pointer;
+    position: relative;
 }
 
-.section-title {
-  color: #4FC3F7;
-  font-size: 16px;
-  font-weight: 600;
-  margin-bottom: 15px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.item-color-block {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    box-shadow: inset 0 0 4px rgba(0,0,0,0.3);
 }
 
-.tools-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 10px;
+.item-count {
+    position: absolute;
+    bottom: 2px;
+    right: 4px;
+    color: #ffffff;
+    text-shadow: 2px 2px 0 #3f3f3f;
+    font-size: 12px;
+    font-weight: bold;
+    pointer-events: none;
 }
 
-.tool-item {
-  background: rgba(255, 255, 255, 0.05);
-  border-radius: 8px;
-  padding: 12px;
-  cursor: pointer;
-  transition: all 0.2s;
-  border: 2px solid transparent;
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.tool-item:hover {
-  background: rgba(255, 255, 255, 0.1);
-  transform: translateY(-1px);
-}
-
-.tool-item.active {
-  border-color: #FFD700;
-  background: rgba(255, 215, 0, 0.1);
-}
-
-.tool-item.broken {
-  opacity: 0.5;
-  filter: grayscale(1);
-}
-
-.tool-icon {
-  font-size: 24px;
-  width: 40px;
-  height: 40px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.3);
-  border-radius: 6px;
-}
-
-.tool-info {
-  flex: 1;
-}
-
-.tool-name {
-  color: white;
-  font-size: 14px;
-  font-weight: 600;
-  margin-bottom: 4px;
-}
-
-.tool-durability {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
+/* Полоса прочности */
 .durability-bar {
-  flex: 1;
-  height: 6px;
-  background: rgba(0, 0, 0, 0.3);
-  border-radius: 3px;
-  overflow: hidden;
+    position: absolute;
+    bottom: 0;
+    left: 2px;
+    right: 2px;
+    height: 3px;
+    background: rgba(0,0,0,0.5);
+    border-radius: 1px;
 }
 
 .durability-fill {
-  height: 100%;
-  transition: width 0.3s;
+    height: 100%;
+    background: linear-gradient(90deg, #4CAF50, #FF9800, #F44336);
+    border-radius: 1px;
+    transition: width 0.3s;
 }
 
-.durability-fill.high { background: #4CAF50; }
-.durability-fill.medium { background: #FF9800; }
-.durability-fill.low { background: #F44336; }
-
-.durability-text {
-  font-size: 11px;
-  color: #aaa;
-  min-width: 45px;
+/* HUD Хотбар */
+.hud-hotbar-container {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0,0,0,0.5);
+    padding: 8px;
+    border-radius: 8px;
+    border: 2px solid rgba(255,255,255,0.2);
 }
 
-.tool-hotkey {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  background: rgba(0, 0, 0, 0.6);
-  color: #FFD700;
-  font-size: 10px;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.hotbar-hud .mc-slot {
+    width: 40px;
+    height: 40px;
 }
 
-/* Ресурсы */
-.section-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 15px;
+/* Minecraft Tooltip */
+.mc-tooltip {
+    position: fixed;
+    background: rgba(16, 0, 16, 0.95);
+    border: 2px solid #280659;
+    padding: 8px 12px;
+    color: #ffffff;
+    z-index: 10000;
+    pointer-events: none;
+    border-image: linear-gradient(#280659, #12022b) 1;
+    max-width: 250px;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.5);
 }
 
-.section-controls {
-  display: flex;
-  align-items: center;
+.tooltip-name {
+    color: #ffffff;
+    font-size: 16px;
+    margin-bottom: 4px;
+    font-weight: bold;
 }
 
-.search-box {
-  position: relative;
+.tooltip-id {
+    color: #777777;
+    font-size: 12px;
+    margin-bottom: 2px;
 }
 
-.search-input {
-  background: rgba(0, 0, 0, 0.4);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 20px;
-  padding: 8px 16px 8px 32px;
-  color: white;
-  font-size: 14px;
-  width: 200px;
-  transition: all 0.2s;
+.tooltip-type {
+    color: #aaaaaa;
+    font-size: 12px;
+    margin-bottom: 4px;
 }
 
-.search-input:focus {
-  outline: none;
-  border-color: #4FC3F7;
-  width: 250px;
+.tooltip-quantity {
+    color: #4CAF50;
+    font-size: 14px;
+    margin-top: 4px;
 }
 
-.search-icon {
-  position: absolute;
-  left: 10px;
-  top: 50%;
-  transform: translateY(-50%);
-  color: #aaa;
-  font-size: 14px;
+.tooltip-durability {
+    color: #FF9800;
+    font-size: 14px;
+    margin-top: 4px;
 }
 
-.resources-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-  gap: 10px;
-  max-height: 400px;
-  overflow-y: auto;
-  padding-right: 5px;
+/* Анимация появления */
+.mc-fade-enter-active, .mc-fade-leave-active {
+    transition: opacity 0.2s;
 }
 
-/* Стили скроллбара */
-.resources-grid::-webkit-scrollbar {
-  width: 6px;
-}
-
-.resources-grid::-webkit-scrollbar-track {
-  background: rgba(0, 0, 0, 0.2);
-  border-radius: 3px;
-}
-
-.resources-grid::-webkit-scrollbar-thumb {
-  background: rgba(255, 215, 0, 0.3);
-  border-radius: 3px;
-}
-
-.resources-grid::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 215, 0, 0.5);
-}
-
-.resource-item {
-  background: rgba(255, 255, 255, 0.05);
-  border-radius: 8px;
-  padding: 10px;
-  cursor: pointer;
-  transition: all 0.2s;
-  border: 2px solid transparent;
-  position: relative;
-}
-
-.resource-item:hover {
-  background: rgba(255, 255, 255, 0.1);
-  transform: translateY(-1px);
-}
-
-.resource-item.selected {
-  border-color: #4FC3F7;
-  background: rgba(79, 195, 247, 0.1);
-}
-
-.resource-icon {
-  width: 60px;
-  height: 60px;
-  border-radius: 6px;
-  border: 2px solid rgba(255, 255, 255, 0.2);
-  margin: 0 auto 8px;
-  position: relative;
-  background-size: cover;
-  background-position: center;
-}
-
-.stack-count {
-  position: absolute;
-  bottom: -6px;
-  right: -6px;
-  background: rgba(0, 0, 0, 0.9);
-  color: white;
-  font-size: 12px;
-  font-weight: bold;
-  min-width: 22px;
-  height: 22px;
-  border-radius: 11px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 2px solid white;
-}
-
-.persistent-badge {
-  position: absolute;
-  top: -6px;
-  left: -6px;
-  background: #FFD700;
-  color: #000;
-  font-size: 10px;
-  font-weight: bold;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.resource-info {
-  text-align: center;
-}
-
-.resource-name {
-  color: white;
-  font-size: 12px;
-  font-weight: 600;
-  margin-bottom: 4px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.resource-meta {
-  display: flex;
-  justify-content: space-between;
-  font-size: 10px;
-  color: #aaa;
-}
-
-.resource-type, .resource-count {
-  background: rgba(255, 255, 255, 0.1);
-  padding: 2px 6px;
-  border-radius: 4px;
-}
-
-.stack-bar {
-  height: 4px;
-  background: rgba(0, 0, 0, 0.3);
-  border-radius: 2px;
-  margin-top: 8px;
-  overflow: hidden;
-}
-
-.stack-fill {
-  height: 100%;
-  background: linear-gradient(90deg, #4CAF50, #8BC34A);
-  transition: width 0.3s;
-}
-
-/* Пустой инвентарь */
-.empty-inventory {
-  text-align: center;
-  padding: 40px 20px;
-  color: #888;
-}
-
-.empty-icon {
-  font-size: 48px;
-  margin-bottom: 16px;
-  opacity: 0.5;
-}
-
-.empty-text {
-  font-size: 16px;
-  margin-bottom: 20px;
-}
-
-.btn-clear-search {
-  background: rgba(255, 255, 255, 0.1);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  color: white;
-  padding: 8px 16px;
-  border-radius: 8px;
-  cursor: pointer;
-  font-size: 14px;
-  transition: all 0.2s;
-}
-
-.btn-clear-search:hover {
-  background: rgba(255, 255, 255, 0.2);
-}
-
-/* Уведомления */
-.notifications {
-  position: fixed;
-  bottom: 20px;
-  right: 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  z-index: 10001;
-}
-
-.notification {
-  background: rgba(0, 0, 0, 0.9);
-  border-left: 4px solid;
-  border-radius: 6px;
-  padding: 10px 15px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 250px;
-  max-width: 350px;
-  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
-  cursor: pointer;
-  animation: slideIn 0.3s ease-out;
-}
-
-@keyframes slideIn {
-  from {
-    transform: translateX(100%);
+.mc-fade-enter-from, .mc-fade-leave-to {
     opacity: 0;
-  }
-  to {
-    transform: translateX(0);
-    opacity: 1;
-  }
 }
 
-.notification-success {
-  border-color: #4CAF50;
-}
-
-.notification-error {
-  border-color: #F44336;
-}
-
-.notification-warning {
-  border-color: #FF9800;
-}
-
-.notification-info {
-  border-color: #2196F3;
-}
-
-.notification-icon {
-  font-size: 16px;
-}
-
-.notification-text {
-  flex: 1;
-  color: white;
-  font-size: 14px;
-}
-
-.notification-close {
-  background: none;
-  border: none;
-  color: #aaa;
-  font-size: 18px;
-  cursor: pointer;
-  padding: 0;
-  width: 20px;
-  height: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-}
-
-.notification-close:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: white;
-}
-
-.notification-leave-active {
-  transition: all 0.3s;
-}
-
-.notification-leave-to {
-  opacity: 0;
-  transform: translateX(100%);
+.move-loading {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(0, 0, 0, 0.8);
+    color: white;
+    padding: 10px 20px;
+    border-radius: 5px;
+    z-index: 10001;
+    pointer-events: none;
 }
 </style>

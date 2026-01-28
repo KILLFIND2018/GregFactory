@@ -21,18 +21,25 @@ class PlayerController extends Controller
         }
 
         try {
-            $player = Player::firstOrCreate(
-                ['username' => $request->username],
-                [
+            // Проверяем, существует ли уже игрок
+            $player = Player::where('username', $request->username)->first();
+
+            if (!$player) {
+                // Создаем нового игрока
+                $player = Player::create([
+                    'username' => $request->username,
                     'x' => 0,
                     'y' => 0,
                     'hp' => 100,
                     'world' => 'earth'
-                ]
-            );
+                ]);
 
-            // Даем игроку начальные инструменты
-            $this->giveStarterTools($player->id);
+                // Даем стартовые инструменты только новому игроку
+                $this->giveStarterTools($player->id);
+            } else {
+                // Если игрок уже существует, не даем повторно стартовые инструменты
+                // Можно просто вернуть существующего игрока
+            }
 
             return response()->json([
                 'id' => $player->id,
@@ -52,15 +59,21 @@ class PlayerController extends Controller
      */
     private function giveStarterTools(int $playerId): void
     {
-        $starterTools = [
-            ['type' => 'tool', 'id' => 'hand', 'quantity' => 1],
-            ['type' => 'tool', 'id' => 'axe', 'quantity' => 1],
-            ['type' => 'tool', 'id' => 'shovel', 'quantity' => 1],
-            ['type' => 'tool', 'id' => 'pickaxe', 'quantity' => 1]
+        $starterItems = [
+            ['type' => 'tool', 'id' => 'wooden_pickaxe', 'slot' => 0],
+            ['type' => 'tool', 'id' => 'wooden_axe', 'slot' => 1],
+            ['type' => 'block', 'id' => 'dirt', 'qty' => 64, 'slot' => 2],
+            ['type' => 'block', 'id' => 'grass', 'qty' => 32, 'slot' => 3],
         ];
 
-        foreach ($starterTools as $tool) {
-            PlayerInventory::addItem($playerId, $tool['type'], $tool['id'], $tool['quantity']);
+        foreach ($starterItems as $item) {
+            PlayerInventory::addItem(
+                $playerId,
+                $item['type'],
+                $item['id'],
+                $item['qty'] ?? 1,
+                $item['slot'] // Передаем индекс слота
+            );
         }
     }
 

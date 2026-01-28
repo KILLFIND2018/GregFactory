@@ -10,9 +10,8 @@ class PlayerInventory extends Model
     protected $table = 'player_inventories';
 
     protected $fillable = [
-        'player_id', 'item_type', 'item_id',
-        'quantity', 'durability', 'max_durability',
-        'metadata'
+        'player_id', 'item_type', 'item_id', 'slot_index', // Добавили slot_index
+        'quantity', 'durability', 'max_durability', 'metadata'
     ];
 
     protected $casts = [
@@ -32,67 +31,75 @@ class PlayerInventory extends Model
      */
     public static function getFullInventory(int $playerId): array
     {
-        $items = self::where('player_id', $playerId)->get();
-
-        $inventory = [
-            'blocks' => [],
-            'tools' => [],
-            'items' => []
-        ];
-
-        foreach ($items as $item) {
-            switch ($item->item_type) {
-                case 'block':
-                    $inventory['blocks'][$item->item_id] = [
-                        'count' => $item->quantity,
-                        'item' => $item
-                    ];
-                    break;
-                case 'tool':
-                    $inventory['tools'][$item->item_id] = [
-                        'durability' => $item->durability,
-                        'max_durability' => $item->max_durability,
-                        'item' => $item
-                    ];
-                    break;
-                case 'item':
-                    $inventory['items'][$item->item_id] = [
-                        'count' => $item->quantity,
-                        'item' => $item
-                    ];
-                    break;
-            }
-        }
-
-        return $inventory;
+        // Просто возвращаем все предметы игрока.
+        // На фронте мы будем искать предмет по полю slot_index
+        return self::where('player_id', $playerId)->get()->toArray();
     }
 
     /**
      * Добавить предмет в инвентарь
      */
-    public static function addItem(int $playerId, string $itemType, string $itemId, int $quantity = 1, ?array $metadata = null): self
+    public static function addItem(int $playerId, string $itemType, string $itemId, int $quantity = 1, ?int $slotIndex = null, ?array $metadata = null): self
     {
-        $item = self::firstOrNew([
-            'player_id' => $playerId,
-            'item_type' => $itemType,
-            'item_id' => $itemId
-        ]);
+        // Если слот указан, проверяем, свободен ли он
+        if ($slotIndex !== null) {
+            $existingItem = self::where([
+                'player_id' => $playerId,
+                'slot_index' => $slotIndex
+            ])->first();
 
-        if ($item->exists) {
-            $item->quantity += $quantity;
-        } else {
-            $item->quantity = $quantity;
+            if ($existingItem) {
+                // Если слот занят, ищем свободный слот
+                $slotIndex = null;
+            }
+        }
 
-            // Устанавливаем прочность для инструментов
-            if ($itemType === 'tool') {
-                $toolConfig = config("game_tools.{$itemId}");
-                if ($toolConfig) {
-                    $item->durability = $toolConfig['durability'] ?? 60;
-                    $item->max_durability = $toolConfig['durability'] ?? 60;
+        // Если слот не указан или указанный занят, ищем первый свободный
+        if ($slotIndex === null) {
+            $occupiedSlots = self::where('player_id', $playerId)
+                ->pluck('slot_index')
+                ->toArray();
+
+            for ($i = 0; $i < 45; $i++) {
+                if (!in_array($i, $occupiedSlots)) {
+                    $slotIndex = $i;
+                    break;
                 }
             }
 
-            $item->metadata = $metadata;
+            // Если все слоты заняты, выбрасываем исключение
+            if ($slotIndex === null) {
+                throw new \Exception('Инвентарь полон');
+            }
+        }
+
+        // Проверяем, есть ли уже такой предмет (для стаканья)
+        $item = self::where([
+            'player_id' => $playerId,
+            'item_id' => $itemId,
+            'item_type' => $itemType
+        ])->first();
+
+        if ($item && $itemType !== 'tool') {
+            // Для не-инструментов увеличиваем количество
+            $item->quantity += $quantity;
+            $item->save();
+            return $item;
+        }
+
+        // Создаем новый предмет
+        $item = new self([
+            'player_id' => $playerId,
+            'item_type' => $itemType,
+            'item_id' => $itemId,
+            'slot_index' => $slotIndex,
+            'quantity' => $quantity,
+            'metadata' => $metadata
+        ]);
+
+        if ($itemType === 'tool') {
+            $item->durability = 60;
+            $item->max_durability = 60;
         }
 
         $item->save();

@@ -27,7 +27,6 @@ const TOOLS_CONFIG = {
     hand: {
         id: 'hand',
         name: 'Рука',
-        durability: Infinity,
         miningLevel: 0,
         miningSpeed: 1.0,
         damage: 1,
@@ -35,7 +34,7 @@ const TOOLS_CONFIG = {
             'plant': true,
             'dirt': true,
             'wood': true,
-        }
+        },
     },
     axe: {
         id: 'axe',
@@ -289,6 +288,17 @@ const chunkQueue = [];
 let activeRequests = 0;
 let currentSeed = 1767904171111;
 
+window.VueInventory = null;
+let currentHotbarSlot = 0; // Текущий выбранный слот хотбара (0-8)
+
+let currentTool = 'hand';
+let serverInventory = [];
+
+let lastClickTime = 0;
+const CLICK_DEBOUNCE = 500; // 500ms
+
+const inflightMoves = new Set();
+
 // ========== МОДУЛЬ ИГРОКА ==========
 const PlayerModule = (function() {
     const player = {
@@ -506,86 +516,6 @@ const PlayerModule = (function() {
         player,
         update,
         render
-    };
-})();
-
-// ========== МОДУЛЬ ИНВЕНТАРЯ ==========
-const InventoryModule = (function() {
-    return {
-        tools: {
-            hand: {...TOOLS_CONFIG.hand, durability: Infinity},
-            axe: {...TOOLS_CONFIG.axe, durability: TOOLS_CONFIG.axe.durability},
-            shovel: {...TOOLS_CONFIG.shovel, durability: TOOLS_CONFIG.shovel.durability},
-            pickaxe: {...TOOLS_CONFIG.pickaxe, durability: TOOLS_CONFIG.pickaxe.durability}
-        },
-        currentTool: 'hand',
-        blocks: {},
-        items: {},
-
-        switchTool(toolId) {
-            if (this.tools[toolId]) {
-                this.currentTool = toolId;
-                console.log(`Инструмент изменен на: ${this.tools[toolId].name}`);
-
-                if (useVueInventory) {
-                    updateVueInventory();
-                    showVueNotification(`Инструмент: ${this.tools[toolId].name}`, 'info');
-                }
-                return true;
-            }
-            return false;
-        },
-
-        useTool() {
-            const tool = this.tools[this.currentTool];
-            if (tool.durability !== Infinity) {
-                tool.durability--;
-                if (tool.durability <= 0) {
-                    console.log(`Инструмент ${tool.name} сломался!`);
-                    this.currentTool = 'hand';
-                }
-            }
-        },
-
-        addBlock(blockType, count = 1) {
-            if (!this.blocks[blockType]) {
-                this.blocks[blockType] = 0;
-            }
-            this.blocks[blockType] = Math.min(this.blocks[blockType] + count, CONSTANTS.MAX_STACK);
-        },
-
-        getCurrentTool() {
-            return this.tools[this.currentTool];
-        },
-
-        canMineBlock(blockType) {
-            const tool = this.getCurrentTool();
-            const blockConfig = BLOCKS_CONFIG[blockType];
-
-            if (!blockConfig || !tool) return false;
-
-            if (tool.miningLevel < blockConfig.level) {
-                console.log(`Слишком низкий уровень инструмента! Нужен уровень ${blockConfig.level}`);
-                return false;
-            }
-
-            if (blockConfig.tool && blockConfig.tool !== tool.id) {
-                if (blockConfig.tool === 'pickaxe' && tool.id !== 'pickaxe') return false;
-                if (blockConfig.tool === 'axe' && tool.id !== 'axe') return false;
-                if (blockConfig.tool === 'shovel' && tool.id !== 'shovel') return false;
-            }
-
-            return tool.canMine[blockConfig.type] || false;
-        },
-
-        getMiningSpeed(blockType) {
-            const tool = this.getCurrentTool();
-            const blockConfig = BLOCKS_CONFIG[blockType];
-
-            if (!this.canMineBlock(blockType)) return 0;
-
-            return (tool.miningSpeed / blockConfig.hardness) * 100;
-        }
     };
 })();
 
@@ -906,10 +836,420 @@ const RenderModule = (function() {
     };
 })();
 
+// ========== МЕНЕДЖЕР ИНВЕНТАРЯ ==========
+const InventoryManager = {
+    // 🔒 Блокировка слотов во время перемещения
+    _inflightMoves: new Set(),
+
+    // Данные (только для чтения извне)
+    items: [], // Все предметы с slot_index
+    tools: {}, // Кэш инструментов для быстрого доступа
+    blocks: {}, // Кэш блоков для быстрого доступа
+
+    // Инициализация
+    init(playerId) {
+        this.playerId = playerId;
+        this.loadFromServer();
+    },
+
+    // Загрузка с сервера
+    async loadFromServer() {
+        try {
+            const res = await fetch(`${CONSTANTS.API_BASE}/inventory?player_id=${this.playerId}`);
+            const data = await res.json();
+
+            if (data.success && data.inventory) {
+                this.updateInventory(data.inventory);
+                console.log('Инвентарь загружен с сервера:', data.inventory);
+            }
+        } catch (error) {
+            console.error('Ошибка загрузки инвентаря:', error);
+        }
+    },
+
+    // Обновление данных
+    updateInventory(inventoryArray) {
+        this.items = inventoryArray || [];
+        this.updateCaches();
+
+        // Обновляем Vue инвентарь
+        if (window.VueInventory?.updateData) {
+            window.VueInventory.updateData({
+                inventory: this.items,
+                currentHotbarSlot,
+                currentTool
+            });
+        }
+
+        // Обновляем game_v2.js переменные
+        window.inventoryData = this.items;
+    },
+
+    // Обновление кэшей
+    updateCaches() {
+        this.tools = {};
+        this.blocks = {};
+
+        this.items.forEach(item => {
+            if (item.item_type === 'tool') {
+                const toolId = item.item_id.replace('wooden_', '');
+                this.tools[toolId] = {
+                    ...item,
+                    name: getToolDisplayName(item.item_id),
+                    miningLevel: 1,
+                    miningSpeed: 2.0,
+                    damage: toolId === 'axe' ? 4 : 3,
+                    canMine: getToolCanMine(toolId),
+                    durability: item.durability || 60, // Добавляем дефолт
+                    maxDurability: 60 // Добавляем дефолт
+                };
+            } else if (item.item_type === 'block') {
+                this.blocks[item.item_id] = (this.blocks[item.item_id] || 0) + item.quantity;
+            }
+        });
+    },
+
+    // Получение предмета в слоте
+    getItemAt(slotIndex) {
+        return this.items.find(item => item.slot_index === slotIndex);
+    },
+
+    // Получение текущего инструмента
+    getCurrentTool() {
+        if (currentTool === 'hand') {
+            return TOOLS_CONFIG.hand;
+        }
+
+        // Проверяем, есть ли инструмент в кэше
+        const tool = this.tools[currentTool];
+
+        // Если нет в кэше, пытаемся найти в TOOLS_CONFIG
+        if (!tool) {
+            const configTool = TOOLS_CONFIG[currentTool];
+            if (configTool) {
+                return {
+                    ...configTool,
+                    durability: 60, // Дефолтная прочность
+                    name: configTool.name || currentTool
+                };
+            }
+            // Если ничего не найдено, возвращаем руку
+            return TOOLS_CONFIG.hand;
+        }
+
+        // Добавляем дефолтные значения, если их нет
+        return {
+            ...tool,
+            durability: tool.durability || 60,
+            miningLevel: tool.miningLevel || 1,
+            miningSpeed: tool.miningSpeed || 2.0,
+            damage: tool.damage || (currentTool === 'axe' ? 4 : 3),
+            name: tool.name || currentTool
+        };
+    },
+
+    // Получение количества блока
+    getBlockCount(blockId) {
+        return this.blocks[blockId] || 0;
+    },
+
+    // Проверка возможности добычи
+    canMineBlock(blockType) {
+        const tool = this.getCurrentTool();
+        const blockConfig = BLOCKS_CONFIG[blockType];
+
+        if (!blockConfig || !tool) return false;
+
+        if (tool.miningLevel < blockConfig.level) {
+            console.log(`Слишком низкий уровень инструмента! Нужен уровень ${blockConfig.level}`);
+            return false;
+        }
+
+        if (blockConfig.tool && blockConfig.tool !== tool.id) {
+            if (blockConfig.tool === 'pickaxe' && tool.id !== 'pickaxe') return false;
+            if (blockConfig.tool === 'axe' && tool.id !== 'axe') return false;
+            if (blockConfig.tool === 'shovel' && tool.id !== 'shovel') return false;
+        }
+
+        return tool.canMine[blockConfig.type] || false;
+    },
+
+    // Получение скорости добычи
+    getMiningSpeed(blockType) {
+        const tool = this.getCurrentTool();
+        const blockConfig = BLOCKS_CONFIG[blockType];
+
+        if (!this.canMineBlock(blockType)) return 0;
+
+        return (tool.miningSpeed / blockConfig.hardness) * 100;
+    },
+
+    // Использование инструмента (уменьшение прочности)
+    useTool() {
+        const tool = this.getCurrentTool();
+        if (tool.id === 'hand') return;
+
+        // Находим инструмент в инвентаре
+        const toolItem = this.items.find(item =>
+            item.item_type === 'tool' &&
+            item.item_id.replace('wooden_', '') === tool.id
+        );
+
+        if (!toolItem) return;
+
+        // Уменьшаем прочность
+        toolItem.durability = Math.max(0, (toolItem.durability || 60) - 1);
+
+        // Если сломался
+        if (toolItem.durability <= 0) {
+            // Удаляем из инвентаря
+            this.items = this.items.filter(item => item !== toolItem);
+
+            // Переключаем на руку
+            currentTool = 'hand';
+
+            // Обновляем Vue
+            this.updateInventory(this.items);
+
+            // Отправляем на сервер
+            this.syncToServer();
+
+            showVueNotification(`${tool.name} сломался!`, 'warning');
+        } else {
+            // Обновляем Vue
+            this.updateInventory(this.items);
+        }
+    },
+
+    // Синхронизация с сервером
+    async syncToServer() {
+        // Обновление прочности инструмента
+        for (const item of this.items) {
+            if (item.item_type === 'tool' && item.durability !== undefined) {
+                try {
+                    await fetch(`${CONSTANTS.API_BASE}/inventory/update-tool`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            player_id: this.playerId,
+                            tool_id: item.item_id,
+                            durability: item.durability
+                        })
+                    });
+                } catch (error) {
+                    console.error('Ошибка синхронизации инструмента:', error);
+                }
+            }
+        }
+    },
+
+    // ПЕРЕКЛЮЧЕНИЕ ИНСТРУМЕНТА ПО ID (добавлено)
+    switchTool(toolId) {
+        if (toolId === 'hand') {
+            currentTool = 'hand';
+            localStorage.setItem('currentTool', 'hand');
+            return;
+        }
+
+        // Проверяем, есть ли такой инструмент в инвентаре
+        const toolItem = this.items.find(item =>
+            item.item_type === 'tool' &&
+            item.item_id.replace('wooden_', '') === toolId
+        );
+
+        if (toolItem) {
+            currentTool = toolId;
+            localStorage.setItem('currentTool', toolId);
+            console.log(`Переключен инструмент: ${toolId}`);
+
+            // Обновляем Vue инвентарь
+            if (window.VueInventory?.updateData) {
+                window.VueInventory.updateData({
+                    inventory: this.items,
+                    currentHotbarSlot,
+                    currentTool
+                });
+            }
+        } else {
+            console.warn(`Инструмент ${toolId} не найден в инвентаре`);
+        }
+    },
+
+    // ПЕРЕКЛЮЧЕНИЕ ИНСТРУМЕНТА ПО СЛОТУ ХОТБАРА (добавлено)
+    switchToolByHotbarSlot(slotIndex) {
+        const item = this.getItemAt(slotIndex);
+
+        if (item && item.item_type === 'tool') {
+            const toolId = item.item_id.replace('wooden_', '');
+            this.switchTool(toolId);
+        } else {
+            // Если в слоте не инструмент, переключаем на руку
+            this.switchTool('hand');
+        }
+    },
+
+    // ОБНОВЛЕНИЕ ИНСТРУМЕНТОВ ИЗ СЕРВЕРНЫХ ДАННЫХ (добавлено)
+    updateToolsFromServer(inventoryArray) {
+        this.updateInventory(inventoryArray);
+
+        // Восстанавливаем выбранный инструмент из localStorage
+        const savedTool = localStorage.getItem('currentTool');
+        if (savedTool && (savedTool === 'hand' || this.tools[savedTool])) {
+            this.switchTool(savedTool);
+        } else {
+            // Пытаемся найти инструмент в хотбаре
+            for (let slot = 0; slot < 9; slot++) {
+                const itemInSlot = inventoryArray.find(item =>
+                    item.slot_index === slot && item.item_type === 'tool'
+                );
+                if (itemInSlot) {
+                    const toolId = itemInSlot.item_id.replace('wooden_', '');
+                    if (this.tools[toolId]) {
+                        this.switchTool(toolId);
+                        break;
+                    }
+                }
+            }
+        }
+    },
+    async optimisticMove(fromSlot, toSlot) {
+        // простая защита от одинаковых слотов
+        if (fromSlot === toSlot) return {success: true};
+
+        // защита от конфликтующих перемещений
+        if (this._inflightMoves.has(fromSlot) || this._inflightMoves.has(toSlot)) {
+            console.warn('Slot busy:', fromSlot, toSlot);
+            return {success: false, error: 'slot_busy'};
+        }
+
+        // помечаем как in-flight
+        this._inflightMoves.add(fromSlot);
+        this._inflightMoves.add(toSlot);
+
+        // snapshot для отката
+        const snapshot = JSON.parse(JSON.stringify(this.items));
+
+        // helper: find item index in array by slot_index
+        const findIndexBySlot = (arr, slot) => arr.findIndex(it => it.slot_index === slot);
+
+        try {
+            // --- оптимистично применяем локально ---
+            const fromIdx = findIndexBySlot(this.items, fromSlot);
+            const toIdx = findIndexBySlot(this.items, toSlot);
+
+            if (fromIdx === -1) {
+                // ничего не перемещаем — предмет исчез на сервере
+                throw new Error('item_not_found_local');
+            }
+
+            // Меняем slot_index локально: swap или move
+            if (toIdx !== -1) {
+                // swap
+                const tmp = this.items[fromIdx].slot_index;
+                this.items[fromIdx].slot_index = this.items[toIdx].slot_index;
+                this.items[toIdx].slot_index = tmp;
+            } else {
+                // simple move
+                this.items[fromIdx].slot_index = toSlot;
+            }
+
+            // применяем изменения в UI
+            this.updateInventory([...this.items]);
+
+            // Доп. UI событие (может пригодиться Vue)
+            window.dispatchEvent(new CustomEvent('inventory-move-start', {
+                detail: {fromSlot, toSlot}
+            }));
+
+            // --- отправляем в бекенд ---
+            const res = await fetch(`${CONSTANTS.API_BASE}/inventory/move`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    player_id: this.playerId,
+                    from_slot: fromSlot,
+                    to_slot: toSlot
+                })
+            });
+
+            if (!res.ok) {
+                const text = await res.text();
+                console.error('move API error', res.status, text);
+                throw new Error('move_api_error');
+            }
+
+            const data = await res.json();
+
+            // если сервер вернул success — считаем, что всё ок
+            if (data && data.success) {
+                // сервер подтвердил — локальное состояние считаем каноничным
+                return { success: true };
+            } else {
+                console.warn('move response no success', data);
+                throw new Error('move_failed');
+            }
+        } catch (err) {
+            console.error('optimisticMove failed:', err);
+
+            // откат локального состояния (snapshot)
+            try {
+                this.updateInventory(snapshot);
+            } catch (e) {
+                console.error('rollback failed:', e);
+            }
+
+            // уведомим Vue и подгрузим свежий инвентарь с сервера (forceRefresh)
+            await APIModule.loadPlayerInventory(this.playerId, true);
+
+            window.dispatchEvent(new CustomEvent('inventory-move-end', {
+                detail: {fromSlot, toSlot, success: false, error: err.message}
+            }));
+
+            return {success: false, error: err.message};
+        } finally {
+            // снимаем lock
+            this._inflightMoves.delete(fromSlot);
+            this._inflightMoves.delete(toSlot);
+        }
+    }
+};
+
+
+
+
+
+
+// Вспомогательные функции
+function getToolDisplayName(itemId) {
+    const names = {
+        'wooden_pickaxe': 'Деревянная кирка',
+        'wooden_axe': 'Деревянный топор',
+        'wooden_shovel': 'Деревянная лопата'
+    };
+    return names[itemId] || itemId.replace('_', ' ');
+}
+
+function getToolCanMine(toolId) {
+    switch(toolId) {
+        case 'axe':
+            return { 'plant': true, 'dirt': false, 'wood': true, 'leaves': true };
+        case 'shovel':
+            return { 'plant': false, 'dirt': true, 'sand': true, 'gravel': true, 'clay': true };
+        case 'pickaxe':
+            return { 'stone': true, 'ore': true, 'mineral': true };
+        default:
+            return { 'plant': true, 'dirt': true, 'wood': true };
+    }
+}
+
+
+
+
+
 // ========== МОДУЛЬ ДОБЫЧИ ==========
 const MiningModule = (function() {
     function getBlockToMine(tile) {
-        const tool = InventoryModule.getCurrentTool();
+        const tool = InventoryManager.getCurrentTool();
 
         if (tool.id === 'pickaxe' && tile.o && tile.o !== 'none') {
             return { type: tile.o, layer: 'o' };
@@ -987,7 +1327,7 @@ const MiningModule = (function() {
             return;
         }
 
-        if (!InventoryModule.canMineBlock(blockInfo.type)) {
+        if (!InventoryManager.canMineBlock(blockInfo.type)) {
             console.log('Нельзя добыть этот блок текущим инструментом!');
             const resourceConfig = RESOURCE_CONFIG[blockInfo.type];
             if (resourceConfig && resourceConfig.unbreakable) {
@@ -1005,7 +1345,7 @@ const MiningModule = (function() {
         };
 
         miningMode = true;
-        const miningSpeed = InventoryModule.getMiningSpeed(blockInfo.type);
+        const miningSpeed = InventoryManager.getMiningSpeed(blockInfo.type);
         const miningTime = (1000 / miningSpeed) * 1000;
 
         console.log(`Начата добыча ${blockInfo.type}, время: ${(miningTime/1000).toFixed(2)}с`);
@@ -1039,6 +1379,17 @@ const MiningModule = (function() {
 
             if (!serverResult || !serverResult.success) {
                 throw new Error(serverResult?.error || 'Ошибка добычи на сервере');
+            }
+
+            // Используем инструмент
+            InventoryManager.useTool();
+
+            // Обновляем инвентарь из сервера
+            if (serverResult.inventory) {
+                InventoryManager.updateInventory(serverResult.inventory);
+            } else {
+                // Перезагружаем инвентарь
+                InventoryManager.loadFromServer();
             }
 
             if (serverResult.tile) {
@@ -1099,9 +1450,9 @@ const MiningModule = (function() {
                     showVueNotification?.(`+${drop} ${blockInfo.type}`, 'success');
                 }
 
-                const tool = InventoryModule.getCurrentTool();
+                const tool = InventoryManager.getCurrentTool();
                 if (tool.durability !== Infinity) {
-                    InventoryModule.useTool();
+                    InventoryManager.useTool();
                 }
             }
 
@@ -1133,7 +1484,7 @@ const MiningModule = (function() {
     }
 
     function getMiningPreview(tile) {
-        const tool = InventoryModule.getCurrentTool();
+        const tool = InventoryManager.getCurrentTool();
         const preview = {
             canMine: false,
             currentLayer: null,
@@ -1173,7 +1524,7 @@ const MiningModule = (function() {
 
             preview.currentLayer = layer;
             preview.resourceCount = resourceConfig.drop;
-            preview.canMine = InventoryModule.canMineBlock(layer.type);
+            preview.canMine = InventoryManager.canMineBlock(layer.type);
 
             switch(layer.layer) {
                 case 'e':
@@ -1330,70 +1681,45 @@ const APIModule = (function() {
         }
     }
 
+
     async function loadPlayerInventory(playerId, forceRefresh = false) {
         try {
             if (forceRefresh) {
                 const cacheKey = `inventory_${playerId}`;
                 apiCache.delete(cacheKey);
-                console.log('Кэш инвентаря очищен');
             }
 
-            const timestamp = Date.now();
-            const res = await cachedFetch(
-                `${CONSTANTS.API_BASE}/inventory?player_id=${playerId}&t=${timestamp}`,
-                {},
-                forceRefresh ? null : `inventory_${playerId}`
-            );
+            const res = await APIModule.fetchPlayerInventory(playerId);
 
-            const inventory = res.inventory ?? res;
+            // Обрабатываем разные форматы ответа
+            let inventoryData = res.inventory || res;
 
-            if (!inventory) {
-                console.warn('Инвентарь пуст', res);
-                return;
+            if (!inventoryData) {
+                console.warn('Инвентарь пуст или не получен');
+                inventoryData = [];
             }
 
-            InventoryModule.blocks = {};
-            InventoryModule.items = {};
-            updateVueInventory();
+            // Сохраняем серверные данные
+            if (Array.isArray(inventoryData)) {
+                // Обновляем инструменты из серверных данных
+                InventoryManager.updateToolsFromServer(inventoryData);
 
-            if (inventory.blocks) {
-                for (const [blockType, data] of Object.entries(inventory.blocks)) {
-                    const count = typeof data === 'object' ? data.count : data;
-                    if (count > 0) {
-                        InventoryModule.blocks[blockType] = count;
-                    }
+                // Восстанавливаем выбранный слот хотбара из localStorage
+                const savedHotbarSlot = localStorage.getItem('currentHotbarSlot');
+                if (savedHotbarSlot !== null) {
+                    currentHotbarSlot = parseInt(savedHotbarSlot);
                 }
             }
 
-            if (inventory.items) {
-                for (const [itemId, data] of Object.entries(inventory.items)) {
-                    const count = typeof data === 'object' ? data.count : data;
-                    if (count > 0) {
-                        InventoryModule.items[itemId] = count;
-                    }
-                }
-            }
-
-            if (inventory.tools) {
-                for (const [id, tool] of Object.entries(inventory.tools)) {
-                    if (InventoryModule.tools[id]) {
-                        InventoryModule.tools[id].durability = tool.durability;
-                    }
-                }
-            }
-
-            if (inventory.current_tool && InventoryModule.tools[inventory.current_tool]) {
-                InventoryModule.currentTool = inventory.current_tool;
-            }
-
-            console.log('Инвентарь загружен с сервера:', inventory);
-            return inventory;
+            updateVueInventory(inventoryData);
+            return inventoryData;
 
         } catch (error) {
             console.error('Ошибка загрузки инвентаря:', error);
             return null;
         }
     }
+
 
     return {
         /** @private - используется только внутри модуля */
@@ -1509,7 +1835,7 @@ const UIModule = (function() {
         const player = PlayerModule.player;
         const playerX = Math.floor(player.x);
         const playerY = Math.floor(player.y);
-        const tool = InventoryModule.getCurrentTool();
+        const tool = InventoryManager.getCurrentTool();
 
         for (let dx = -CONSTANTS.MINING_RADIUS; dx <= CONSTANTS.MINING_RADIUS; dx++) {
             for (let dy = -CONSTANTS.MINING_RADIUS; dy <= CONSTANTS.MINING_RADIUS; dy++) {
@@ -1574,7 +1900,14 @@ const UIModule = (function() {
     }
 
     function renderEnhancedUI() {
-        const tool = InventoryModule.getCurrentTool();
+        // Получаем текущий инструмент
+        const tool = InventoryManager.getCurrentTool();
+
+        // Проверяем, что tool существует
+        if (!tool) {
+            console.error('Инструмент не найден!');
+            return;
+        }
 
         // Панель состояния соединения
         ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
@@ -1609,14 +1942,24 @@ const UIModule = (function() {
         ctx.fillText(`Инструмент: ${tool.name}`, 20, canvas.height - 130);
         ctx.fillText(`Уровень: ${tool.miningLevel}`, 20, canvas.height - 110);
 
-        if (tool.durability === Infinity) {
+        // Проверяем наличие durability перед использованием
+        const durability = tool.durability;
+        const toolConfig = TOOLS_CONFIG[tool.id];
+
+
+
+        if (durability === Infinity || tool.id === 'hand') {
             ctx.fillText('Прочность: ∞', 20, canvas.height - 90);
-        } else {
-            ctx.fillText(`Прочность: ${tool.durability}/${TOOLS_CONFIG[tool.id].durability}`, 20, canvas.height - 90);
-            const durabilityPercent = (tool.durability / TOOLS_CONFIG[tool.id].durability) * 100;
-            ctx.fillStyle = durabilityPercent > 50 ? '#4CAF50' :
-                durabilityPercent > 20 ? '#FF9800' : '#F44336';
-            ctx.fillRect(20, canvas.height - 80, 200 * (durabilityPercent / 100), 8);
+        } else if (durability !== undefined) {
+            const maxDurability = tool.maxDurability || (toolConfig ? toolConfig.durability : 60);
+            ctx.fillText(`Прочность: ${durability}/${maxDurability}`, 20, canvas.height - 90);
+
+            if (maxDurability && maxDurability > 0) {
+                const durabilityPercent = (durability / maxDurability) * 100;
+                ctx.fillStyle = durabilityPercent > 50 ? '#4CAF50' :
+                    durabilityPercent > 20 ? '#FF9800' : '#F44336';
+                ctx.fillRect(20, canvas.height - 80, 200 * (durabilityPercent / 100), 8);
+            }
         }
 
         if (miningTarget) {
@@ -2194,7 +2537,7 @@ const SyncModule = (function() {
         inventorySyncInProgress = true;
 
         try {
-            const oldBlocks = { ...InventoryModule.blocks };
+            const oldBlocks = { ...InventoryManager.blocks };
 
             const serverInventory = await APIModule.loadPlayerInventory(window.playerId, true);
 
@@ -2243,30 +2586,51 @@ function checkVueInventory() {
         vueInventoryReady = true;
         console.log('✅ Используется Vue инвентарь');
         showInventory = false;
+
+        // Тест: попробуем загрузить инвентарь сразу
+        if (window.playerId) {
+            setTimeout(() => {
+                window.VueInventory.fetchInventory && window.VueInventory.fetchInventory(window.playerId);
+            }, 500);
+        }
     } else {
         console.log('❌ Vue инвентарь не найден, используется canvas');
         useVueInventory = false;
     }
 }
 
-function updateVueInventory() {
+function updateVueInventory(inventoryArray) {
     if (!useVueInventory || !vueInventoryReady) return;
 
     try {
         setTimeout(() => {
-            const inventoryData = {
-                blocks: { ...InventoryModule.blocks },
-                tools: {},
-                currentTool: InventoryModule.currentTool
-            };
-
-            for (const [id, tool] of Object.entries(InventoryModule.tools)) {
-                inventoryData.tools[id] = {
-                    durability: tool.durability,
-                    name: tool.name || TOOLS_CONFIG[id]?.name || id
-                };
+            // Если передали массив инвентаря, обновляем серверные данные
+            if (inventoryArray && Array.isArray(inventoryArray)) {
+                InventoryManager.updateToolsFromServer(inventoryArray);
             }
 
+            // Создаем данные для Vue инвентаря
+            const inventoryData = {
+                inventory: InventoryManager.items, // Передаем все предметы
+                blocks: InventoryManager.blocks,
+                tools: {},
+                currentTool: currentTool, // Используем глобальную переменную
+                currentHotbarSlot: currentHotbarSlot // Используем глобальную переменную
+            };
+
+            // Обновляем инструменты для Vue
+            Object.keys(InventoryManager.tools).forEach(key => {
+                if (key !== 'hand') {
+                    const tool = InventoryManager.tools[key];
+                    inventoryData.tools[key] = {
+                        durability: tool.durability,
+                        name: tool.name,
+                        maxDurability: tool.maxDurability || 60
+                    };
+                }
+            });
+
+            // Обновляем Vue инвентарь
             if (window.VueInventory && window.VueInventory.updateData) {
                 window.VueInventory.updateData(inventoryData);
             }
@@ -2319,6 +2683,11 @@ async function initializeGame() {
                 PlayerModule.player.x = serverPlayer.x;
                 PlayerModule.player.y = serverPlayer.y;
             }
+        }
+
+        // Инициализируем менеджер инвентаря
+        if (window.playerId) {
+            InventoryManager.init(window.playerId);
         }
 
         ChunkModule.preloadInitialChunks();
@@ -2381,15 +2750,19 @@ function loop() {
 window.addEventListener("keydown", (e) => {
     keys[e.key.toLowerCase()] = true;
 
-    // Переключение инструментов
-    if (e.key === '1') InventoryModule.switchTool('hand');
-    if (e.key === '2') InventoryModule.switchTool('axe');
-    if (e.key === '3') InventoryModule.switchTool('shovel');
-    if (e.key === '4') InventoryModule.switchTool('pickaxe');
+    // Выбор слотов хотбара (1-9)
+    if (e.key >= '1' && e.key <= '9') {
+        e.preventDefault();
+        const slotIndex = parseInt(e.key) - 1;
+        currentHotbarSlot = slotIndex;
 
-    // Отмена добычи при смене инструмента
-    if (miningMode && (e.key === '1' || e.key === '2' || e.key === '3' || e.key === '4')) {
-        MiningModule.cancelMining();
+        // Переключаем инструмент по слоту
+        InventoryManager.switchToolByHotbarSlot(slotIndex);
+
+        // Обновляем Vue инвентарь
+        if (useVueInventory) {
+            updateVueInventory();
+        }
     }
 
     // Управление режимами
@@ -2480,6 +2853,12 @@ canvas.addEventListener('wheel', (e) => {
 }, { passive: false });
 
 canvas.addEventListener('click', (e) => {
+
+    // Debounce
+    const now = Date.now();
+    if (now - lastClickTime < CLICK_DEBOUNCE) return;
+    lastClickTime = now;
+
     if (miningMode) {
         MiningModule.cancelMining();
         return;
@@ -2546,7 +2925,7 @@ function showLayerSelectionMenu(tx, ty, tile, chunk) {
 
     let selectedLayer = null;
     for (const layer of layers) {
-        if (InventoryModule.canMineBlock(layer.type)) {
+        if (InventoryManager.canMineBlock(layer.type)) {
             selectedLayer = layer;
             break;
         }
@@ -2563,6 +2942,11 @@ function showLayerSelectionMenu(tx, ty, tile, chunk) {
 // ========== ЗАПУСК ИГРЫ ==========
 document.addEventListener("DOMContentLoaded", () => {
     initializeGame();
+
+    const savedTool = localStorage.getItem('currentTool');
+    if (savedTool && TOOLS_CONFIG[savedTool]) {
+        currentTool = savedTool;
+    }
 
     setInterval(() => {
         if (!window.playerId && gameInitialized) {
@@ -2592,10 +2976,22 @@ window.addEventListener('error', function(event) {
     }
 });
 
+window.addEventListener('inventory-updated', (event) => {
+    let { inventory, currentHotbarSlot, currentTool } = event.detail;
+
+    // Обновляем менеджер
+    InventoryManager.updateInventory(inventory);
+
+
+
+    console.log('Инвентарь обновлен из Vue:', inventory);
+});
+
+
 // ========== ЭКСПОРТ ДЛЯ ТЕСТОВ ==========
 if (typeof window !== 'undefined') {
     window.gamePlayer = PlayerModule.player;
-    window.gameInventory = InventoryModule;
+    window.gameInventory = InventoryManager;
     window.gameCamera = camera;
     window.gameCanvas = canvas;
     window.gameCtx = ctx;
@@ -2632,3 +3028,5 @@ setInterval(() => {
         APIModule.loadPlayerInventory(window.playerId);
     }
 }, 10000);
+
+window.InventoryManager = InventoryManager;

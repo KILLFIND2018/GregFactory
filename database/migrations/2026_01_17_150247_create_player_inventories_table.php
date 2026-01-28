@@ -14,15 +14,23 @@ return new class extends Migration
         Schema::create('player_inventories', function (Blueprint $table) {
             $table->id();
             $table->foreignId('player_id')->constrained('players')->onDelete('cascade');
-            $table->string('item_type', 20)->nullable(false); // 'block', 'tool', 'item'
-            $table->string('item_id', 50)->nullable(false); // 'stone', 'wood_planks', 'axe'
+
+            // 1. Добавляем индекс слота.
+            // 0-8 это хотбар, 9-44 это основной инвентарь (всего 45 слотов)
+            $table->integer('slot_index')->default(0);
+
+            $table->string('item_type', 20)->nullable(false);
+            $table->string('item_id', 50)->nullable(false);
             $table->integer('quantity')->default(0);
-            $table->integer('durability')->nullable(); // для инструментов
-            $table->integer('max_durability')->nullable(); // максимальная прочность
-            $table->json('metadata')->nullable(); // дополнительные данные
+            $table->integer('durability')->nullable();
+            $table->integer('max_durability')->nullable();
+            $table->json('metadata')->nullable();
             $table->timestamps();
 
-            $table->unique(['player_id', 'item_type', 'item_id']);
+            // 2. ВАЖНО: Удаляем старый уникальный ключ и ставим новый.
+            // Теперь уникальность — это "Один игрок + Один номер слота".
+            $table->unique(['player_id', 'slot_index']);
+
             $table->index(['player_id', 'item_type']);
         });
     }

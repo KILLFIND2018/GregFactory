@@ -23,7 +23,7 @@ Route::prefix('blocks')->group(function () {
     Route::get('/area', [BlockController::class, 'getArea']);
     Route::get('/tile', [BlockController::class, 'getTile']);
     Route::post('/update', [BlockController::class, 'update']);
-    Route::post('/update-tile', [BlockController::class, 'updateTile']); // Добавить эту строку
+    Route::post('/update-tile', [BlockController::class, 'updateTile']);
     Route::post('/batch-update', [BlockController::class, 'batchUpdate']);
     Route::post('/mine', [BlockController::class, 'mineBlock']);
     Route::delete('/delete', [BlockController::class, 'destroy']);
@@ -54,4 +54,6 @@ Route::prefix('inventory')->group(function () {
     Route::post('/update-tool', [InventoryController::class, 'updateToolDurability']);
     Route::post('/transfer', [InventoryController::class, 'transferItem']);
     Route::get('/item-count', [InventoryController::class, 'getItemCount']);
+    Route::get('/update-slot', [InventoryController::class, 'updateSlot']);
+    Route::post('/move', [InventoryController::class, 'moveItem']);
 });

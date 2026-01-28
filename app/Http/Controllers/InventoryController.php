@@ -275,4 +275,92 @@ class InventoryController extends Controller
             'item' => $item
         ]);
     }
+
+    //метод для сохранения позиции после перетаскивания.
+
+    public function updateSlot(Request $request)
+    {
+        $request->validate([
+            'player_id' => 'required|integer',
+            'from_slot' => 'required|integer',
+            'to_slot' => 'required|integer',
+        ]);
+
+        DB::transaction(function () use ($request) {
+            $item = PlayerInventory::where('player_id', $request->player_id)
+                ->where('slot_index', $request->from_slot)
+                ->first();
+
+            $target = PlayerInventory::where('player_id', $request->player_id)
+                ->where('slot_index', $request->to_slot)
+                ->first();
+
+            if ($item) {
+                if ($target) {
+                    // Если в целевом слоте есть предмет — меняем их местами (Swap)
+                    $target->update(['slot_index' => -1]); // Временный индекс
+                    $item->update(['slot_index' => $request->to_slot]);
+                    $target->update(['slot_index' => $request->from_slot]);
+                } else {
+                    // Просто переносим в пустой слот
+                    $item->update(['slot_index' => $request->to_slot]);
+                }
+            }
+        });
+
+        return response()->json(['success' => true]);
+    }
+
+    public function moveItem(Request $request)
+    {
+        \Log::info('=== MOVE ITEM START ===', $request->all());
+
+        $userId = $request->input('player_id');
+        $fromSlot = $request->input('from_slot');
+        $toSlot = $request->input('to_slot');
+
+        \Log::info("Player $userId: moving from $fromSlot to $toSlot");
+
+        return DB::transaction(function () use ($userId, $fromSlot, $toSlot) {
+            // Получаем текущий инвентарь ДО операции
+            $beforeInventory = PlayerInventory::where('player_id', $userId)->get();
+            \Log::info('Inventory BEFORE:', $beforeInventory->toArray());
+
+            $itemSource = PlayerInventory::where('player_id', $userId)
+                ->where('slot_index', $fromSlot)
+                ->first();
+
+            if (!$itemSource) {
+                \Log::warning("Item not found in slot $fromSlot for player $userId");
+
+                // Покажем текущее состояние БД для отладки
+                $currentInventory = PlayerInventory::where('player_id', $userId)->get();
+                \Log::info('Current inventory state:', $currentInventory->toArray());
+
+                return response()->json(['error' => 'Item not found'], 404);
+            }
+
+            $itemTarget = PlayerInventory::where('player_id', $userId)
+                ->where('slot_index', $toSlot)
+                ->first();
+
+            if ($itemTarget) {
+                \Log::info("Swapping items");
+                $tempSlot = -1;
+                $itemTarget->update(['slot_index' => $tempSlot]);
+                $itemSource->update(['slot_index' => $toSlot]);
+                $itemTarget->update(['slot_index' => $fromSlot]);
+            } else {
+                \Log::info("Moving to empty slot");
+                $itemSource->update(['slot_index' => $toSlot]);
+            }
+
+            // Получаем инвентарь ПОСЛЕ операции
+            $afterInventory = PlayerInventory::where('player_id', $userId)->get();
+            \Log::info('Inventory AFTER:', $afterInventory->toArray());
+
+            \Log::info('=== MOVE ITEM END ===');
+            return response()->json(['success' => true]);
+        });
+    }
 }

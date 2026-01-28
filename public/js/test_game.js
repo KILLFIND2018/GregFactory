@@ -54,7 +54,7 @@ function loadGameVariables() {
 
     // Основные объекты (из экспорта game_v2.js)
     game.player = window.gamePlayer || PlayerModule?.player;
-    game.inventory = window.gameInventory || InventoryModule;
+    game.inventory = window.gameInventory || InventoryManager;
     game.camera = window.gameCamera || camera;
     game.canvas = window.gameCanvas || document.getElementById('game');
     game.ctx = window.gameCtx || ctx;
@@ -123,7 +123,7 @@ window.GameTests = {
             { name: 'PlayerModule', obj: PlayerModule },
             { name: 'WorldModule', obj: WorldModule },
             { name: 'MiningModule', obj: MiningModule },
-            { name: 'InventoryModule', obj: InventoryModule },
+            { name: 'InventoryManager', obj: InventoryManager },
             { name: 'APIModule', obj: APIModule },
             { name: 'UIModule', obj: UIModule },
             { name: 'ChunkModule', obj: ChunkModule },
@@ -279,7 +279,7 @@ GameTests.basic = {
             { name: 'PlayerModule', obj: PlayerModule },
             { name: 'WorldModule', obj: WorldModule },
             { name: 'MiningModule', obj: MiningModule },
-            { name: 'InventoryModule', obj: InventoryModule },
+            { name: 'InventoryManager', obj: InventoryManager },
             { name: 'APIModule', obj: APIModule },
             { name: 'UIModule', obj: UIModule },
             { name: 'ChunkModule', obj: ChunkModule },
@@ -302,7 +302,7 @@ GameTests.basic = {
                         console.log(`   player: ${hasPlayer ? '✅' : '❌'}, update: ${hasUpdate ? '✅' : '❌'}, render: ${hasRender ? '✅' : '❌'}`);
                         allFound = allFound && hasPlayer && hasUpdate && hasRender;
                         break;
-                    case 'InventoryModule':
+                    case 'InventoryManager':
                         const hasTools = module.obj.tools && typeof module.obj.tools === 'object';
                         const hasSwitchTool = typeof module.obj.switchTool === 'function';
                         console.log(`   tools: ${hasTools ? '✅' : '❌'}, switchTool: ${hasSwitchTool ? '✅' : '❌'}`);
@@ -977,7 +977,7 @@ GameTests.debugState = function() {
     console.log(`PlayerModule: ${PlayerModule ? '✅' : '❌'}`);
     console.log(`WorldModule: ${WorldModule ? '✅' : '❌'}`);
     console.log(`MiningModule: ${MiningModule ? '✅' : '❌'}`);
-    console.log(`InventoryModule: ${InventoryModule ? '✅' : '❌'}`);
+    console.log(`InventoryManager: ${InventoryManager ? '✅' : '❌'}`);
 
     console.log('\n👤 ИГРОК:');
     if (game.player) {
@@ -1047,7 +1047,7 @@ GameTests.checkVariables = function() {
 
     const variables = [
         { name: 'PlayerModule', value: PlayerModule, type: 'object' },
-        { name: 'InventoryModule', value: InventoryModule, type: 'object' },
+        { name: 'InventoryManager', value: InventoryManager, type: 'object' },
         { name: 'player', value: game.player, type: 'object' },
         { name: 'inventory', value: game.inventory, type: 'object' },
         { name: 'camera', value: game.camera, type: 'object' },
