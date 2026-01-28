@@ -895,13 +895,14 @@ const InventoryManager = {
                 const toolId = item.item_id.replace('wooden_', '');
                 this.tools[toolId] = {
                     ...item,
+                    id: toolId,  // ← Добавьте это!
                     name: getToolDisplayName(item.item_id),
                     miningLevel: 1,
                     miningSpeed: 2.0,
                     damage: toolId === 'axe' ? 4 : 3,
                     canMine: getToolCanMine(toolId),
-                    durability: item.durability || 60, // Добавляем дефолт
-                    maxDurability: 60 // Добавляем дефолт
+                    durability: item.durability || 60,
+                    maxDurability: 60
                 };
             } else if (item.item_type === 'block') {
                 this.blocks[item.item_id] = (this.blocks[item.item_id] || 0) + item.quantity;
@@ -960,18 +961,23 @@ const InventoryManager = {
 
         if (!blockConfig || !tool) return false;
 
+        // Проверка уровня инструмента
         if (tool.miningLevel < blockConfig.level) {
             console.log(`Слишком низкий уровень инструмента! Нужен уровень ${blockConfig.level}`);
             return false;
         }
 
-        if (blockConfig.tool && blockConfig.tool !== tool.id) {
+        // Проверка совместимости инструмента
+        if (blockConfig.tool) {
+            // Если для блока требуется конкретный инструмент
             if (blockConfig.tool === 'pickaxe' && tool.id !== 'pickaxe') return false;
             if (blockConfig.tool === 'axe' && tool.id !== 'axe') return false;
             if (blockConfig.tool === 'shovel' && tool.id !== 'shovel') return false;
+            if (blockConfig.tool === 'hand' && tool.id !== 'hand') return false;
         }
 
-        return tool.canMine[blockConfig.type] || false;
+        // Проверка возможности добычи по типу блока
+        return tool.canMine && tool.canMine[blockConfig.type] || false;
     },
 
     // Получение скорости добычи
