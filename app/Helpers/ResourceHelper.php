@@ -189,4 +189,30 @@ class ResourceHelper
         // Делаем первую букву заглавной
         return ucfirst($name);
     }
+    /**
+     * Проверить, можно ли ставить блок
+     */
+    public static function canPlace(string $resourceId): bool
+    {
+        $config = self::getConfig($resourceId);
+        return $config['placeable'] ?? true;
+    }
+
+    /**
+     * Получить слой для установки блока
+     */
+    public static function getPlaceLayer(string $resourceId): string
+    {
+        $config = self::getConfig($resourceId);
+        return $config['place_layer'] ?? 's';
+    }
+
+    /**
+     * Получить требуемую поверхность для установки
+     */
+    public static function getRequiredSurface(string $resourceId): ?array
+    {
+        $config = self::getConfig($resourceId);
+        return $config['requires_surface'] ?? null;
+    }
 }

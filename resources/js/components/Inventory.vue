@@ -293,9 +293,6 @@ const hide = () => {
     isOpen.value = false;
 };
 
-const isVisible = () => {
-    return isOpen.value;
-};
 
 // Уведомления
 const addNotification = (text, type = 'info') => {
@@ -308,7 +305,7 @@ window.VueInventory = {
     updateData, // 🔥 ВОТ ЭТО ГЛАВНОЕ
     show,
     hide,
-    isVisible,
+    isVisible: () => isOpen.value,
     addNotification
 };
 
@@ -383,7 +380,7 @@ defineExpose({  updateData });
     margin-bottom: 12px;
     font-size: 18px;
     text-align: center;
-    text-shadow: 2px 2px 0px #fff;
+    text-shadow: 2px 2px 0 #fff;
 }
 
 .hotbar-label {

@@ -28,6 +28,8 @@ return [
         'dirt' => [
             'finite' => true,
             'drop' => 1,
+            'placeable' => true, // можно ли размещать
+            'place_layer' => 's', // тип слоя после установки
             'item_type' => 'block',
             'stackable' => true,
             'category' => 'ground'
@@ -79,9 +81,12 @@ return [
         'grass' => [
             'finite' => true,
             'drop' => 1,
+            'placeable' => true, // можно ли размещать
+            'place_layer' => 's', // какой тип слоя
             'item_type' => 'block',
             'stackable' => true,
-            'category' => 'plant'
+            'category' => 'plant', // категория
+            'requires_surface' => ['dirt'] //на какой слой можно разместить
         ],
         'grass_detail' => [
             'finite' => true,
@@ -144,9 +149,12 @@ return [
         'tree' => [
             'finite' => true,
             'drop' => 3,
+            'placeable' => true,
+            'place_layer' => 'e',
             'item_type' => 'block',
             'stackable' => true,
-            'category' => 'wood'
+            'category' => 'wood',
+            'requires_surface' => ['grass', 'dirt']
         ],
         'jungle_tree' => [
             'finite' => true,

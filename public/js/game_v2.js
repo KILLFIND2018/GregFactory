@@ -299,6 +299,63 @@ const CLICK_DEBOUNCE = 500; // 500ms
 
 const inflightMoves = new Set();
 
+// ========== ФУНКЦИЯ УСТАНОВКИ БЛОКА ==========
+async function placeBlock(tx, ty, blockItem, layer = 's') {
+    console.log(`Вызываю placeBlock для ${blockItem.item_id} на (${tx}, ${ty})`);
+
+    try {
+        const response = await fetch(`${CONSTANTS.API_BASE}/blocks/place`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                player_id: window.playerId,
+                world_id: 1,
+                x: tx,
+                y: ty,
+                layer: layer,
+                block_type: blockItem.item_id
+            })
+        });
+
+        if (!response.ok) {
+            const text = await response.text();
+            throw new Error(text);
+        }
+
+        const data = await response.json();
+
+        if (data.success) {
+            console.log('Блок успешно установлен:', data);
+
+            // Обновляем инвентарь
+            await APIModule.loadPlayerInventory(window.playerId, true);
+
+            // Обновляем чанк
+            const cx = Math.floor(tx / CONSTANTS.CHUNK_SIZE);
+            const cy = Math.floor(ty / CONSTANTS.CHUNK_SIZE);
+            const chunkKey = `${cx},${cy}`;
+            const chunk = chunkCache.get(chunkKey);
+
+            if (chunk && data.tile) {
+                const lx = ((tx % CONSTANTS.CHUNK_SIZE) + CONSTANTS.CHUNK_SIZE) % CONSTANTS.CHUNK_SIZE;
+                const ly = ((ty % CONSTANTS.CHUNK_SIZE) + CONSTANTS.CHUNK_SIZE) % CONSTANTS.CHUNK_SIZE;
+                chunk.tiles[ly][lx] = data.tile;
+
+                // Перерисовываем чанк
+                MiningModule.refreshChunk(chunk);
+            }
+
+            showVueNotification(`Блок ${blockItem.item_id} установлен!`, 'success');
+        } else {
+            console.error('Ошибка установки блока:', data.error);
+            showVueNotification(`Ошибка: ${data.error}`, 'error');
+        }
+    } catch (error) {
+        console.error('Ошибка установки блока:', error);
+        showVueNotification(`Ошибка: ${error.message}`, 'error');
+    }
+}
+
 // ========== МОДУЛЬ ИГРОКА ==========
 const PlayerModule = (function() {
     const player = {
@@ -686,8 +743,17 @@ const RenderModule = (function() {
                 return;
             }
 
+            // Сначала рендерим жидкость (нижний слой)
+            const liquidLayer = layers.find(layer => layer.type === 'liquid');
+            if (liquidLayer) {
+                this.renderLayer(ctx, x, y, liquidLayer, tileSize);
+            }
+
+            // Затем рендерим остальные слои (кроме жидкости, если она уже отрендерена)
             layers.forEach(layer => {
-                this.renderLayer(ctx, x, y, layer, tileSize);
+                if (layer.type !== 'liquid') {
+                    this.renderLayer(ctx, x, y, layer, tileSize);
+                }
             });
         },
 
@@ -835,6 +901,8 @@ const RenderModule = (function() {
         LayerRenderer
     };
 })();
+
+
 
 // ========== МЕНЕДЖЕР ИНВЕНТАРЯ ==========
 const InventoryManager = {
@@ -1216,6 +1284,127 @@ const InventoryManager = {
             // снимаем lock
             this._inflightMoves.delete(fromSlot);
             this._inflightMoves.delete(toSlot);
+        }
+    },
+    async placeBlock(tx, ty, blockType, layer = 's') {
+        console.log(`Пытаюсь установить блок ${blockType} на (${tx}, ${ty}), слой: ${layer}`);
+
+        // Ищем блок во всем инвентаре
+        const item = this.items.find(i =>
+            i.item_id === blockType &&
+            i.item_type === 'block'
+        );
+
+        if (!item || item.quantity < 1) {
+            console.log('Недостаточно блоков в инвентаре');
+            showVueNotification(`Недостаточно блоков ${blockType}`, 'warning');
+            return false;
+        }
+
+        try {
+            const response = await fetch(`${CONSTANTS.API_BASE}/blocks/place`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    player_id: window.playerId,
+                    world_id: 1,
+                    x: tx,
+                    y: ty,
+                    layer: layer,
+                    block_type: blockType
+                })
+            });
+
+            if (!response.ok) {
+                const text = await response.text();
+                throw new Error(text);
+            }
+
+            const data = await response.json();
+
+            if (data.success) {
+                console.log('Блок успешно установлен:', data);
+
+                // Обновляем инвентарь
+                await APIModule.loadPlayerInventory(window.playerId, true);
+
+                // Обновляем чанк
+                const cx = Math.floor(tx / CONSTANTS.CHUNK_SIZE);
+                const cy = Math.floor(ty / CONSTANTS.CHUNK_SIZE);
+                const chunkKey = `${cx},${cy}`;
+                const chunk = chunkCache.get(chunkKey);
+
+                if (chunk && data.tile) {
+                    const lx = ((tx % CONSTANTS.CHUNK_SIZE) + CONSTANTS.CHUNK_SIZE) % CONSTANTS.CHUNK_SIZE;
+                    const ly = ((ty % CONSTANTS.CHUNK_SIZE) + CONSTANTS.CHUNK_SIZE) % CONSTANTS.CHUNK_SIZE;
+
+                    // Сохраняем жидкость из старого тайла
+                    const oldTile = chunk.tiles[ly][lx];
+                    if (oldTile && oldTile.l && oldTile.l !== 'none') {
+                        data.tile.l = oldTile.l;
+                        data.tile.la = oldTile.la;
+                        data.tile.lm = oldTile.lm;
+                    }
+
+                    chunk.tiles[ly][lx] = data.tile;
+                    MiningModule.refreshChunk(chunk);
+                }
+
+                if (data.message) {
+                    showVueNotification(data.message, 'success');
+                } else {
+                    showVueNotification(`Блок ${blockType} установлен!`, 'success');
+                }
+                return true;
+            } else {
+                console.error('Ошибка установки блока:', data.error);
+                showVueNotification(`Ошибка: ${data.error}`, 'error');
+                return false;
+            }
+        } catch (error) {
+            console.error('Ошибка установки блока:', error);
+            showVueNotification(`Ошибка: ${error.message}`, 'error');
+            return false;
+        }
+    },
+    switchToBlock(blockId) {
+        // Просто устанавливаем, что выбран этот блок
+        currentTool = 'block'; // или можно хранить отдельную переменную для текущего блока
+        this.currentBlockId = blockId;
+        console.log(`Выбран блок для установки: ${blockId}`);
+    },
+
+    // Добавьте метод для получения текущего блока для установки
+    getCurrentBlock() {
+        if (currentTool === 'block' && this.currentBlockId) {
+            return this.currentBlockId;
+        }
+        return null;
+    },
+    //метод для выбора слота с блоком
+    selectHotbarSlot(slotIndex) {
+        currentHotbarSlot = slotIndex;
+        const item = this.getItemAt(slotIndex);
+
+        if (item) {
+            if (item.item_type === 'tool') {
+                this.switchTool(item.item_id.replace('wooden_', ''));
+            } else if (item.item_type === 'block') {
+                // Запоминаем, что выбран этот блок для установки
+                this.currentBlockId = item.item_id;
+                console.log(`Выбран блок из слота ${slotIndex}: ${item.item_id}`);
+            }
+        } else {
+            this.switchTool('hand');
+        }
+
+        // Обновляем Vue
+        if (window.VueInventory?.updateData) {
+            window.VueInventory.updateData({
+                inventory: this.items,
+                currentHotbarSlot,
+                currentTool
+            });
         }
     }
 };
@@ -1833,6 +2022,34 @@ const UIModule = (function() {
             ctx.lineTo(screenX + 5, screenY + tileSize - 5);
             ctx.stroke();
         }
+
+        // Если в руках блок, показываем индикатор установки
+        const currentItem = InventoryManager.getItemAt(currentHotbarSlot);
+        if (currentItem && currentItem.item_type === 'block') {
+            const screenX = tx * tileSize - camera.x;
+            const screenY = ty * tileSize - camera.y;
+
+            // Показываем зеленый контур для установки
+            ctx.strokeStyle = '#00FF00';
+            ctx.lineWidth = 3;
+            ctx.strokeRect(screenX, screenY, tileSize, tileSize);
+
+            // Показываем предварительный вид блока
+            ctx.fillStyle = COLORS[currentItem.item_id] || '#888888';
+            ctx.globalAlpha = 0.5;
+            ctx.fillRect(screenX, screenY, tileSize, tileSize);
+            ctx.globalAlpha = 1.0;
+
+            // Текст с названием блока
+            ctx.fillStyle = '#FFFFFF';
+            ctx.font = '12px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText(
+                currentItem.item_id,
+                screenX + tileSize/2,
+                screenY - 10
+            );
+        }
     }
 
     function renderRadiusHighlight() {
@@ -1913,6 +2130,18 @@ const UIModule = (function() {
         if (!tool) {
             console.error('Инструмент не найден!');
             return;
+        }
+
+        // Панель выбранного блока
+        const selectedItem = InventoryManager.getItemAt(currentHotbarSlot);
+        if (selectedItem && selectedItem.item_type === 'block') {
+            ctx.fillStyle = 'rgba(0, 255, 0, 0.3)';
+            ctx.fillRect(20, canvas.height - 180, 280, 30);
+
+            ctx.fillStyle = '#FFF';
+            ctx.font = '14px Arial';
+            ctx.textAlign = 'left';
+            ctx.fillText(`Выбран блок: ${selectedItem.item_id} (x${selectedItem.quantity})`, 25, canvas.height - 160);
         }
 
         // Панель состояния соединения
@@ -2761,14 +2990,33 @@ window.addEventListener("keydown", (e) => {
         e.preventDefault();
         const slotIndex = parseInt(e.key) - 1;
         currentHotbarSlot = slotIndex;
+        console.log(`Выбран слот ${slotIndex} (клавиша ${e.key})`);
 
-        // Переключаем инструмент по слоту
-        InventoryManager.switchToolByHotbarSlot(slotIndex);
+        // Получаем предмет в слоте
+        const item = InventoryManager.getItemAt(slotIndex);
+
+        if (item) {
+            if (item.item_type === 'tool') {
+                // Если инструмент - переключаем инструмент
+                const toolId = item.item_id.replace('wooden_', '');
+                console.log(`Переключаю инструмент на: ${toolId}`);
+                InventoryManager.switchTool(toolId);
+            } else if (item.item_type === 'block') {
+                // Если блок - не меняем инструмент, просто выбираем блок для установки
+                console.log(`Выбран блок для установки: ${item.item_id}`);
+                currentTool = 'block'; // Помечаем, что выбран блок
+            }
+        } else {
+            // Пустой слот - переключаем на руку
+            console.log('Пустой слот - переключаю на руку');
+            InventoryManager.switchTool('hand');
+        }
 
         // Обновляем Vue инвентарь
-        if (useVueInventory) {
-            updateVueInventory();
-        }
+        updateVueInventory();
+
+        // Сохраняем выбранный слот
+        localStorage.setItem('currentHotbarSlot', currentHotbarSlot);
     }
 
     // Управление режимами
@@ -2823,13 +3071,180 @@ window.addEventListener("keyup", (e) => {
 });
 
 window.addEventListener('mousedown', (e) => {
+    // Левая кнопка - добыча
     if (e.button !== 0) return;
-    isDragging = true;
-    lastMouseX = e.clientX;
-    lastMouseY = e.clientY;
-    velocityX = 0;
-    velocityY = 0;
+        isDragging = true;
+        lastMouseX = e.clientX;
+        lastMouseY = e.clientY;
+        velocityX = 0;
+        velocityY = 0;
+
+    // ПРАВАЯ кнопка мыши (button === 2)
+    if (e.button === 2) {
+        e.preventDefault();
+
+        // Дебаунс
+        const now = Date.now();
+        if (now - lastClickTime < CLICK_DEBOUNCE) return;
+        lastClickTime = now;
+
+        // Проверяем, открыт ли инвентарь
+        const inventoryOpen = useVueInventory && window.VueInventory &&
+            window.VueInventory.isVisible &&
+            window.VueInventory.isVisible();
+
+        if (inventoryOpen) {
+            return;
+        }
+
+        // Получаем координаты клика
+        const rect = canvas.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        const worldX = (x + camera.x) / tileSize;
+        const worldY = (y + camera.y) / tileSize;
+        const tx = Math.floor(worldX);
+        const ty = Math.floor(worldY);
+
+        console.log(`Правый клик на координатах: ${tx}, ${ty}`);
+
+        // Получаем предмет из текущего слота хотбара
+        const item = InventoryManager.getItemAt(currentHotbarSlot);
+
+        if (!item || item.item_type !== 'block') {
+            console.log('В выбранном слоте нет блока для установки');
+            console.log('Текущий слот:', currentHotbarSlot, 'Предмет:', item);
+            showVueNotification('Выберите блок для установки (слот 1-9)', 'warning');
+            return;
+        }
+
+        // Проверяем расстояние
+        const player = PlayerModule.player;
+        const distance = Math.sqrt(
+            Math.pow(player.x - (tx + 0.5), 2) +
+            Math.pow(player.y - (ty + 0.5), 2)
+        );
+
+        if (distance > CONSTANTS.MINING_RADIUS) {
+            console.log('Слишком далеко для установки!');
+            showVueNotification('Слишком далеко для установки!', 'warning');
+            return;
+        }
+
+        // Проверяем, можно ли установить блок
+        const tile = WorldModule.getTileAt(tx, ty);
+
+        // Нельзя ставить в жидкость
+        if (tile.l && tile.l !== 'none') {
+            showVueNotification('Нельзя ставить блок в жидкость!', 'warning');
+            return;
+        }
+
+        // Нельзя ставить, если уже есть объект (кроме случаев, когда мы ставим поверх него)
+        if (tile.e && tile.e !== 'none') {
+            showVueNotification('Здесь уже есть объект!', 'warning');
+            return;
+        }
+
+        // Определяем слой для установки
+        let layer = 's'; // По умолчанию ставим на поверхность
+
+        // Для некоторых блоков используем другие слои
+        if (item.item_id.includes('tree') ||
+            item.item_id.includes('flower') ||
+            item.item_id === 'cactus' ||
+            item.item_id.includes('bush')) {
+            layer = 'e'; // Объекты
+        }
+
+        console.log(`Пытаюсь установить блок ${item.item_id} на (${tx}, ${ty}), слой: ${layer}`);
+
+        // Устанавливаем блок
+        placeBlock(tx, ty, item, layer);
+    }
+
 });
+
+// Предотвращаем контекстное меню на canvas
+canvas.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+
+    // Дебаунс
+    const now = Date.now();
+    if (now - lastClickTime < CLICK_DEBOUNCE) return;
+    lastClickTime = now;
+
+    // Если открыт инвентарь Vue - игнорируем
+    if (useVueInventory && window.VueInventory &&
+        typeof window.VueInventory.isVisible === 'function' &&
+        window.VueInventory.isVisible()) {
+        return;
+    }
+
+    // ПРАВАЯ кнопка мыши - установка блока
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const worldX = (x + camera.x) / tileSize;
+    const worldY = (y + camera.y) / tileSize;
+    const tx = Math.floor(worldX);
+    const ty = Math.floor(worldY);
+
+    // Получаем выбранный предмет из текущего слота хотбара
+    const item = InventoryManager.getItemAt(currentHotbarSlot);
+
+    if (!item || item.item_type !== 'block') {
+        console.log('В выбранном слоте нет блока для установки');
+        showVueNotification('Выберите блок для установки (слот 1-9)', 'warning');
+        return;
+    }
+
+    // Проверяем расстояние до места установки
+    const player = PlayerModule.player;
+    const distance = Math.sqrt(
+        Math.pow(player.x - (tx + 0.5), 2) +
+        Math.pow(player.y - (ty + 0.5), 2)
+    );
+
+    if (distance > CONSTANTS.MINING_RADIUS) {
+        console.log('Слишком далеко для установки!');
+        showVueNotification('Слишком далеко для установки!', 'warning');
+        return;
+    }
+
+    // Проверяем тайл для информации (жидкость теперь разрешена)
+    const tile = WorldModule.getTileAt(tx, ty);
+
+    // Если есть объект и мы не ставим новый объект - нельзя
+    // Определяем, ставим ли мы объект (дерево, цветок и т.д.)
+    const isEntity = item.item_id.includes('tree') ||
+        item.item_id.includes('flower') ||
+        item.item_id === 'cactus' ||
+        item.item_id.includes('bush');
+
+    if (!isEntity && tile.e && tile.e !== 'none') {
+        showVueNotification('Здесь уже есть объект!', 'warning');
+        return;
+    }
+
+    // Определяем слой для установки
+    let layer = 's'; // По умолчанию ставим на поверхность
+    if (isEntity) {
+        layer = 'e'; // Объекты
+    }
+
+    console.log(`Пытаюсь установить блок ${item.item_id} на (${tx}, ${ty}), слой: ${layer}`);
+
+    // Если есть жидкость, показываем информационное сообщение
+    if (tile.l && tile.l !== 'none') {
+        console.log(`Устанавливаю блок поверх жидкости ${tile.l}`);
+        showVueNotification(`Устанавливаю блок поверх ${tile.l}`, 'info');
+    }
+
+    // Вызываем установку блока через InventoryManager
+    InventoryManager.placeBlock(tx, ty, item.item_id, layer);
+});
+
 
 window.addEventListener('mouseup', () => isDragging = false);
 window.addEventListener('mousemove', (e) => {
@@ -2901,6 +3316,70 @@ canvas.addEventListener('click', (e) => {
     }
 
     MiningModule.startMining(tx, ty, chunk, tile, blockInfo);
+});
+
+// Добавляем ОТДЕЛЬНЫЙ обработчик для ПРАВОЙ кнопки мыши
+canvas.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+
+    // Дебаунс
+    const now = Date.now();
+    if (now - lastClickTime < CLICK_DEBOUNCE) return;
+    lastClickTime = now;
+
+    // Если открыт инвентарь Vue - игнорируем
+    if (useVueInventory && window.VueInventory && window.VueInventory.isVisible()) {
+        return;
+    }
+
+    // ПРАВАЯ кнопка мыши - установка блока
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const worldX = (x + camera.x) / tileSize;
+    const worldY = (y + camera.y) / tileSize;
+    const tx = Math.floor(worldX);
+    const ty = Math.floor(worldY);
+
+    // Получаем выбранный предмет из текущего слота хотбара
+    const item = InventoryManager.getItemAt(currentHotbarSlot);
+
+    if (!item || item.item_type !== 'block') {
+        console.log('В выбранном слоте нет блока для установки');
+        showVueNotification('Выберите блок для установки (слот 1-9)', 'warning');
+        return;
+    }
+
+    // Проверяем расстояние до места установки
+    const player = PlayerModule.player;
+    const distance = Math.sqrt(
+        Math.pow(player.x - (tx + 0.5), 2) +
+        Math.pow(player.y - (ty + 0.5), 2)
+    );
+
+    if (distance > CONSTANTS.MINING_RADIUS) {
+        console.log('Слишком далеко для установки!');
+        showVueNotification('Слишком далеко для установки!', 'warning');
+        return;
+    }
+
+    // Проверяем, можно ли здесь установить блок
+    const tile = WorldModule.getTileAt(tx, ty);
+
+    // Нельзя ставить в жидкость
+    if (tile.l && tile.l !== 'none') {
+        showVueNotification('Нельзя ставить блок в жидкость!', 'warning');
+        return;
+    }
+
+    // Нельзя ставить, если уже есть объект (кроме случаев, когда ставим на поверхность)
+    if (tile.e && tile.e !== 'none' && !['s', 'g'].includes('s')) { // TODO: Уточнить логику слоев
+        showVueNotification('Здесь уже есть объект!', 'warning');
+        return;
+    }
+
+    // Вызываем установку блока
+    InventoryManager.placeBlock(tx, ty, item.item_id);
 });
 
 function showLayerSelectionMenu(tx, ty, tile, chunk) {

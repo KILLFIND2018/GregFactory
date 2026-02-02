@@ -28,6 +28,7 @@ Route::prefix('blocks')->group(function () {
     Route::post('/mine', [BlockController::class, 'mineBlock']);
     Route::delete('/delete', [BlockController::class, 'destroy']);
     Route::delete('/clear-area', [BlockController::class, 'clearArea']);
+    Route::post('/place', [BlockController::class, 'placeBlock']);
 });
 
 /*

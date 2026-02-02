@@ -592,4 +592,128 @@ class BlockController extends Controller
             return response()->json(['error' => 'Ошибка обновления тайла: ' . $e->getMessage()], 500);
         }
     }
+
+
+    /**
+     * Установить блок из инвентаря в мир
+     */
+    public function placeBlock(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'player_id' => 'required|integer|exists:players,id',
+            'x' => 'required|integer',
+            'y' => 'required|integer',
+            'layer' => 'required|string|max:1|in:s,g,o,e,p,l,r',
+            'block_type' => 'required|string|max:50',
+            'world_id' => 'integer|min:1'
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['error' => $validator->errors()], 400);
+        }
+
+        try {
+            DB::beginTransaction();
+
+            $playerId = $request->input('player_id');
+            $x = $request->input('x');
+            $y = $request->input('y');
+            $layer = $request->input('layer');
+            $blockType = $request->input('block_type');
+            $worldId = $request->input('world_id', 1);
+
+            // 1. Проверяем, есть ли блок в инвентаре игрока
+            $item = \App\Models\PlayerInventory::where([
+                'player_id' => $playerId,
+                'item_id' => $blockType,
+                'item_type' => 'block'
+            ])->first();
+
+            if (!$item || $item->quantity < 1) {
+                throw new \Exception('Недостаточно блоков в инвентаре');
+            }
+
+            // 2. Получаем текущий тайл
+            $currentTile = Block::getTileData($x, $y, $worldId);
+
+            // Нормализуем данные
+            $currentTile = array_merge([
+                'b' => null,
+                'l' => null,
+                'la' => 0,
+                'lm' => 0,
+                'o' => null,
+                's' => null,
+                'g' => null,
+                'e' => null,
+                'p' => null,
+                'r' => null
+            ], $currentTile);
+
+            // 3. Проверяем, можно ли установить блок здесь
+            // Если есть объект и мы не заменяем его - нельзя
+            if ($layer !== 'e' && !empty($currentTile['e']) && $currentTile['e'] !== 'none') {
+                throw new \Exception('Здесь уже есть объект');
+            }
+
+            // 4. Устанавливаем блок
+            // Если слой 's' (поверхность) и есть жидкость - всё равно устанавливаем
+            // Блок будет плавать на поверхности жидкости
+            Block::updateOrCreate(
+                [
+                    'world_id' => $worldId,
+                    'x' => $x,
+                    'y' => $y,
+                    'layer' => $layer
+                ],
+                [
+                    'block_type' => $blockType,
+                    'amount' => 1
+                ]
+            );
+
+            // 5. Уменьшаем количество в инвентаре
+            $item->quantity -= 1;
+            if ($item->quantity <= 0) {
+                $item->delete();
+            } else {
+                $item->save();
+            }
+
+            // 6. Получаем обновленный тайл
+            $updatedTile = Block::getTileData($x, $y, $worldId);
+
+            // Сохраняем важные данные (биом, жидкость, руда)
+            // Жидкость сохраняем - блок ставится поверх нее
+            if (!empty($currentTile['l']) && $currentTile['l'] !== 'none') {
+                $updatedTile['l'] = $currentTile['l'];
+                $updatedTile['la'] = $currentTile['la'];
+                $updatedTile['lm'] = $currentTile['lm'];
+            }
+
+            // Сохраняем биом
+            if (!empty($currentTile['b'])) {
+                $updatedTile['b'] = $currentTile['b'];
+            }
+
+            // Сохраняем руду, если она есть
+            if (!empty($currentTile['o']) && $currentTile['o'] !== 'none') {
+                $updatedTile['o'] = $currentTile['o'];
+            }
+
+            DB::commit();
+
+            return response()->json([
+                'success' => true,
+                'tile' => $updatedTile,
+                'remaining' => ($item->quantity ?? 0),
+                'message' => 'Блок установлен' . (!empty($currentTile['l']) ? ' поверх жидкости' : '')
+            ]);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            \Log::error("Place block error: " . $e->getMessage());
+            return response()->json(['error' => 'Ошибка установки блока: ' . $e->getMessage()], 500);
+        }
+    }
 }
